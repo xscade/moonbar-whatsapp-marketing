@@ -2,11 +2,17 @@ import { redirect } from "next/navigation";
 import Image from "next/image";
 import { hasAdminUsers } from "@/lib/auth";
 import { AuthForm } from "@/components/AuthForm";
+import { ConfigError } from "@/components/ConfigError";
 
 export const dynamic = "force-dynamic";
 
 export default async function SetupPage() {
-  const hasAdmins = await hasAdminUsers();
+  let hasAdmins = false;
+  try {
+    hasAdmins = await hasAdminUsers();
+  } catch (err) {
+    return <ConfigError message={err instanceof Error ? err.message : "Unknown error"} />;
+  }
   if (hasAdmins) redirect("/login");
 
   return (
