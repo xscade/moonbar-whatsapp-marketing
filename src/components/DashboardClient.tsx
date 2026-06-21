@@ -248,7 +248,8 @@ export function DashboardClient({ user }: DashboardClientProps) {
 
   async function createContact(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    const form = new FormData(event.currentTarget);
+    const formElement = event.currentTarget;
+    const form = new FormData(formElement);
     const payload = {
       name: String(form.get("name") || ""),
       phone: String(form.get("phone") || ""),
@@ -262,7 +263,7 @@ export function DashboardClient({ user }: DashboardClientProps) {
     setBusy("contact");
     try {
       await api("/api/contacts", { method: "POST", body: JSON.stringify(payload) });
-      event.currentTarget.reset();
+      formElement.reset();
       await refreshAll();
       setNotice("Contact saved");
     } catch (err) {
@@ -978,21 +979,47 @@ function Contacts(props: {
   onDelete: (id: string) => void;
 }) {
   return (
-    <div className="grid gap-5 xl:grid-cols-[0.78fr_1.22fr]">
+    <div className="grid gap-5 xl:grid-cols-[0.68fr_1.32fr]">
       <Section title="Add Contact">
         <form onSubmit={props.onCreate} className="grid gap-3">
-          <input name="name" required placeholder="Name" className="field" />
-          <input name="phone" required placeholder="919381167516" className="field" />
-          <input name="source" placeholder="Source" className="field" />
-          <input name="tags" placeholder="vip, friday, guest-list" className="field" />
-          <textarea name="notes" placeholder="Notes" className="field min-h-24" />
-          <select name="listIds" multiple className="field min-h-28">
-            {props.lists.map((list) => (
-              <option key={list._id} value={list._id}>
-                {list.name}
-              </option>
-            ))}
-          </select>
+          <label className="field-label">
+            Name
+            <input name="name" required placeholder="Namballa Ravikiran" className="field" />
+          </label>
+          <label className="field-label">
+            WhatsApp number
+            <input name="phone" required placeholder="919381167516" className="field" />
+          </label>
+          <label className="field-label">
+            List
+            <select name="listIds" className="field" defaultValue="">
+              <option value="">No list yet</option>
+              {props.lists.map((list) => (
+                <option key={list._id} value={list._id}>
+                  {list.name}
+                </option>
+              ))}
+            </select>
+          </label>
+          <details className="rounded-lg border border-moon-green/12 bg-moon-paper p-3">
+            <summary className="cursor-pointer text-sm font-medium text-moon-green">
+              Optional details
+            </summary>
+            <div className="mt-3 grid gap-3">
+              <label className="field-label">
+                Source
+                <input name="source" placeholder="Walk-in, Instagram, event" className="field" />
+              </label>
+              <label className="field-label">
+                Tags
+                <input name="tags" placeholder="friday, vip, regular" className="field" />
+              </label>
+              <label className="field-label">
+                Notes
+                <textarea name="notes" placeholder="Optional note" className="field min-h-20" />
+              </label>
+            </div>
+          </details>
           <button disabled={props.busy === "contact"} className="primary-button justify-center">
             {props.busy === "contact" ? (
               <Loader2 className="h-4 w-4 animate-spin" />

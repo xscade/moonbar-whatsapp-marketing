@@ -58,15 +58,29 @@ export async function POST(request: Request) {
     const phone = normalizePhone(parsed.data.phone);
     const listIds = parsed.data.listIds.filter(ObjectId.isValid);
 
-    const result = await db.collection("contacts").insertOne({
-      ...parsed.data,
-      phone,
-      listIds,
-      createdAt: now,
-      updatedAt: now
-    });
+    const result = await db.collection("contacts").updateOne(
+      { phone },
+      {
+        $set: {
+          ...parsed.data,
+          phone,
+          listIds,
+          updatedAt: now
+        },
+        $setOnInsert: {
+          createdAt: now
+        }
+      },
+      { upsert: true }
+    );
 
-    return json({ _id: result.insertedId.toString() }, { status: 201 });
+    return json(
+      {
+        _id: result.upsertedId?.toString(),
+        updated: result.matchedCount > 0
+      },
+      { status: result.upsertedId ? 201 : 200 }
+    );
   } catch (err) {
     return handleRouteError(err);
   }
