@@ -406,7 +406,7 @@ export function DashboardClient({ user }: DashboardClientProps) {
               alt="Moon Bar and Kitchen"
               width={44}
               height={44}
-              className="h-11 w-11 rounded-lg border border-moon-green/15 bg-white object-contain"
+              className="h-11 w-11 rounded-lg border border-moon-red/20 bg-moon-red object-contain p-1.5"
               priority
             />
             <div>

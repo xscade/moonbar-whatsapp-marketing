@@ -27,7 +27,7 @@ export default async function LoginPage() {
             alt="Moon Bar and Kitchen"
             width={124}
             height={124}
-            className="h-20 w-20 rounded-lg object-contain"
+            className="h-20 w-20 rounded-lg bg-moon-red object-contain p-2"
             priority
           />
           <h1 className="mt-8 text-4xl font-semibold leading-tight">
