@@ -72,10 +72,13 @@ function formatCampaignTime(value?: string) {
   });
 }
 
-function formatCampaignLabel(campaign: Campaign, index: number) {
-  const name = campaign.name || campaign.templateName || `Campaign ${index + 1}`;
-  const sentAt = formatCampaignTime(campaign.sentAt || campaign.createdAt);
-  return sentAt ? `${name} - ${sentAt}` : name;
+function formatTemplateLabel(value: string) {
+  return value.length > 22 ? `${value.slice(0, 19)}...` : value;
+}
+
+function getInDeliveryCount(campaign: Campaign) {
+  const delivery = getCampaignDeliveryStats(campaign);
+  return Math.max(delivery.submitted - delivery.delivered, 0);
 }
 
 export function Overview({
@@ -97,42 +100,97 @@ export function Overview({
   onResume: (campaign: Campaign) => void;
   onCancel: (campaign: Campaign) => void;
 }) {
-  const [selectedCampaignId, setSelectedCampaignId] = React.useState("all");
+  const [selectedTemplateFilter, setSelectedTemplateFilter] = React.useState("all");
+
+  const templateOptions = React.useMemo(() => {
+    const names = new Set<string>();
+    for (const campaign of campaigns) {
+      if (campaign.templateName) names.add(campaign.templateName);
+    }
+    return Array.from(names).sort((a, b) => a.localeCompare(b));
+  }, [campaigns]);
 
   React.useEffect(() => {
     if (
-      selectedCampaignId !== "all" &&
-      !campaigns.some((campaign) => campaign._id === selectedCampaignId)
+      selectedTemplateFilter !== "all" &&
+      !templateOptions.includes(selectedTemplateFilter)
     ) {
-      setSelectedCampaignId("all");
+      setSelectedTemplateFilter("all");
     }
-  }, [campaigns, selectedCampaignId]);
-
-  const chartCampaigns = React.useMemo(() => {
-    if (selectedCampaignId === "all") return campaigns.slice(0, 9).reverse();
-    const selectedCampaign = campaigns.find(
-      (campaign) => campaign._id === selectedCampaignId
-    );
-    return selectedCampaign ? [selectedCampaign] : [];
-  }, [campaigns, selectedCampaignId]);
+  }, [selectedTemplateFilter, templateOptions]);
 
   const chartData = React.useMemo(
-    () =>
-      chartCampaigns.map((campaign, index) => {
-        const delivery = getCampaignDeliveryStats(campaign);
-        return {
-          name:
-            selectedCampaignId === "all"
-              ? campaign.name
-                ? campaign.name.slice(0, 14)
-                : `#${index + 1}`
-              : formatCampaignLabel(campaign, index).slice(0, 24),
-          Sent: delivery.submitted,
-          Delivered: delivery.delivered
-        };
-      }),
-    [chartCampaigns, selectedCampaignId]
+    () => {
+      if (selectedTemplateFilter === "all") {
+        const byTemplate = new Map<
+          string,
+          { name: string; Sent: number; Delivered: number; "In delivery": number }
+        >();
+
+        for (const campaign of campaigns) {
+          const templateName = campaign.templateName || "Unknown template";
+          const delivery = getCampaignDeliveryStats(campaign);
+          const current = byTemplate.get(templateName) ?? {
+            name: formatTemplateLabel(templateName),
+            Sent: 0,
+            Delivered: 0,
+            "In delivery": 0
+          };
+          current.Sent += delivery.submitted;
+          current.Delivered += delivery.delivered;
+          current["In delivery"] += getInDeliveryCount(campaign);
+          byTemplate.set(templateName, current);
+        }
+
+        return Array.from(byTemplate.values())
+          .sort((a, b) => b.Sent - a.Sent)
+          .slice(0, 9);
+      }
+
+      return campaigns
+        .filter((campaign) => campaign.templateName === selectedTemplateFilter)
+        .slice(0, 9)
+        .reverse()
+        .map((campaign, index) => {
+          const sentAt = formatCampaignTime(campaign.sentAt || campaign.createdAt);
+          const delivery = getCampaignDeliveryStats(campaign);
+          return {
+            name: sentAt || `Run ${index + 1}`,
+            Sent: delivery.submitted,
+            Delivered: delivery.delivered,
+            "In delivery": getInDeliveryCount(campaign)
+          };
+        });
+    },
+    [campaigns, selectedTemplateFilter]
   );
+
+  const selectedTemplateStats = React.useMemo(() => {
+    const scopedCampaigns =
+      selectedTemplateFilter === "all"
+        ? campaigns
+        : campaigns.filter((campaign) => campaign.templateName === selectedTemplateFilter);
+    return scopedCampaigns.reduce(
+      (total, campaign) => {
+        const delivery = getCampaignDeliveryStats(campaign);
+        total.sent += delivery.submitted;
+        total.delivered += delivery.delivered;
+        total.inDelivery += getInDeliveryCount(campaign);
+        total.failed += delivery.failed;
+        return total;
+      },
+      { sent: 0, delivered: 0, inDelivery: 0, failed: 0 }
+    );
+  }, [campaigns, selectedTemplateFilter]);
+
+  const deliveryRate = selectedTemplateStats.sent
+    ? Math.round((selectedTemplateStats.delivered / selectedTemplateStats.sent) * 100)
+    : 0;
+
+  const trendDescription =
+    selectedTemplateFilter === "all"
+      ? "Template-level delivery health across recent sends"
+      : `${selectedTemplateFilter} delivery is still updating from webhooks`;
 
   const statCards = [
     {
@@ -168,27 +226,23 @@ export function Overview({
       <div className="grid gap-6 xl:grid-cols-[1.55fr_1fr]">
         <Section
           title="Delivery trend"
-          description={
-            selectedCampaignId === "all"
-              ? "Sent vs delivered across recent campaigns"
-              : "Sent vs delivered for the selected campaign"
-          }
+          description={trendDescription}
           action={
             <Select
-              value={selectedCampaignId}
-              onValueChange={setSelectedCampaignId}
+              value={selectedTemplateFilter}
+              onValueChange={setSelectedTemplateFilter}
             >
               <SelectTrigger
                 className="h-9 w-[15rem]"
-                aria-label="Select campaign for delivery trend"
+                aria-label="Select template for delivery trend"
               >
-                <SelectValue placeholder="All recent campaigns" />
+                <SelectValue placeholder="All templates" />
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value="all">All recent campaigns</SelectItem>
-                {campaigns.slice(0, 25).map((campaign) => (
-                  <SelectItem key={campaign._id} value={campaign._id}>
-                    {formatCampaignLabel(campaign, 0)}
+                <SelectItem value="all">All templates</SelectItem>
+                {templateOptions.map((templateName) => (
+                  <SelectItem key={templateName} value={templateName}>
+                    {templateName}
                   </SelectItem>
                 ))}
               </SelectContent>
@@ -210,6 +264,10 @@ export function Overview({
                     <linearGradient id="fillSent" x1="0" y1="0" x2="0" y2="1">
                       <stop offset="5%" stopColor="hsl(var(--chart-3))" stopOpacity={0.3} />
                       <stop offset="95%" stopColor="hsl(var(--chart-3))" stopOpacity={0} />
+                    </linearGradient>
+                    <linearGradient id="fillInDelivery" x1="0" y1="0" x2="0" y2="1">
+                      <stop offset="5%" stopColor="hsl(var(--chart-4))" stopOpacity={0.32} />
+                      <stop offset="95%" stopColor="hsl(var(--chart-4))" stopOpacity={0} />
                     </linearGradient>
                   </defs>
                   <CartesianGrid
@@ -241,6 +299,15 @@ export function Overview({
                   />
                   <Area
                     type="monotone"
+                    dataKey="In delivery"
+                    stroke="hsl(var(--chart-4))"
+                    strokeWidth={2}
+                    fill="url(#fillInDelivery)"
+                    dot={{ r: 3 }}
+                    activeDot={{ r: 5 }}
+                  />
+                  <Area
+                    type="monotone"
                     dataKey="Delivered"
                     stroke="hsl(var(--chart-2))"
                     strokeWidth={2.5}
@@ -256,12 +323,18 @@ export function Overview({
               Send a campaign to see delivery trends.
             </div>
           )}
-          <div className="mt-3 flex items-center gap-4 text-xs text-muted-foreground">
+          <div className="mt-3 flex flex-wrap items-center gap-4 text-xs text-muted-foreground">
             <span className="flex items-center gap-1.5">
               <span className="h-2 w-2 rounded-full bg-chart-2" /> Delivered
             </span>
             <span className="flex items-center gap-1.5">
+              <span className="h-2 w-2 rounded-full bg-chart-4" /> In delivery
+            </span>
+            <span className="flex items-center gap-1.5">
               <span className="h-2 w-2 rounded-full bg-chart-3" /> Sent
+            </span>
+            <span className="ml-auto font-medium text-moon-ink">
+              {deliveryRate}% delivered · {selectedTemplateStats.inDelivery.toLocaleString()} still updating
             </span>
           </div>
         </Section>
