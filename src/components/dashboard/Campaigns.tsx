@@ -1,0 +1,391 @@
+"use client";
+
+import { AnimatePresence, motion } from "motion/react";
+import { Loader2, Search, Send, Upload, Users, X } from "lucide-react";
+
+import type {
+  Contact,
+  ContactList,
+  ContactTemplateField,
+  MessageTemplate
+} from "@/types/entities";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/checkbox";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Progress } from "@/components/ui/progress";
+import { ScrollArea } from "@/components/ui/scroll-area";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue
+} from "@/components/ui/select";
+import { staggerContainer } from "@/lib/motion";
+import { cn } from "@/lib/utils";
+import { Section } from "./Section";
+import type { CampaignProgress } from "./types";
+
+export function Campaigns(props: {
+  contacts: Contact[];
+  allContacts: Contact[];
+  lists: ContactList[];
+  selectedContactIds: Set<string>;
+  setSelectedContactIds: (value: Set<string>) => void;
+  selectedListIds: Set<string>;
+  setSelectedListIds: (value: Set<string>) => void;
+  templates: MessageTemplate[];
+  selectedTemplateName: string;
+  setSelectedTemplateName: (value: string) => void;
+  selectedTemplate: MessageTemplate;
+  campaignName: string;
+  setCampaignName: (value: string) => void;
+  parameterValues: Record<string, string>;
+  setParameterValues: (value: Record<string, string>) => void;
+  contactFieldMappings: Record<string, ContactTemplateField>;
+  setContactFieldMappings: (value: Record<string, ContactTemplateField>) => void;
+  search: string;
+  setSearch: (value: string) => void;
+  recipientCount: number;
+  headerImageId: string;
+  headerImageName: string;
+  busy: string;
+  progress: CampaignProgress | null;
+  cancelRequested: boolean;
+  onUploadHeaderImage: (file: File) => void;
+  onSend: () => void;
+  onCancel: () => void;
+}) {
+  const percent = props.progress?.total
+    ? Math.round((props.progress.sent / props.progress.total) * 100)
+    : 0;
+  const sending = props.busy === "send" || props.busy === "media";
+
+  return (
+    <motion.div
+      variants={staggerContainer}
+      initial="hidden"
+      animate="show"
+      className="grid gap-6 xl:grid-cols-[0.95fr_1.05fr]"
+    >
+      <Section title="Campaign builder" description="Compose your broadcast">
+        <div className="grid gap-4">
+          <div className="grid gap-2">
+            <Label htmlFor="campaign-name">Campaign name</Label>
+            <Input
+              id="campaign-name"
+              value={props.campaignName}
+              onChange={(event) => props.setCampaignName(event.target.value)}
+            />
+          </div>
+
+          <div className="grid gap-2">
+            <Label>Template</Label>
+            <Select
+              value={props.selectedTemplateName}
+              onValueChange={props.setSelectedTemplateName}
+            >
+              <SelectTrigger>
+                <SelectValue placeholder="Choose a template" />
+              </SelectTrigger>
+              <SelectContent>
+                {props.templates.map((template) => (
+                  <SelectItem
+                    key={`${template.name}-${template.language}`}
+                    value={template.name}
+                  >
+                    {template.name} ({template.language})
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+
+          <div className="rounded-lg border border-moon-green/12 bg-muted/40 p-3.5 text-sm">
+            <p className="font-medium text-moon-ink">{props.selectedTemplate.name}</p>
+            <p className="mt-2 whitespace-pre-line text-muted-foreground">
+              {props.selectedTemplate.body}
+            </p>
+            {props.selectedTemplate.headerFormat === "IMAGE" ? (
+              <Badge variant="warning" className="mt-3">
+                Image header required
+              </Badge>
+            ) : null}
+          </div>
+
+          {props.selectedTemplate.headerFormat === "IMAGE" ? (
+            <div className="grid gap-2">
+              <Label htmlFor="header-image">Header image</Label>
+              <label
+                className={cn(
+                  "flex cursor-pointer items-center gap-3 rounded-lg border border-dashed border-moon-green/25 bg-card px-3 py-3 text-sm text-muted-foreground transition-colors hover:border-moon-red/40",
+                  props.busy === "media" && "opacity-60"
+                )}
+              >
+                <Upload className="h-4 w-4" />
+                <span className="truncate">
+                  {props.headerImageId
+                    ? props.headerImageName || props.headerImageId
+                    : "Upload PNG, JPG or WebP"}
+                </span>
+                <input
+                  id="header-image"
+                  type="file"
+                  accept="image/png,image/jpeg,image/webp"
+                  className="sr-only"
+                  disabled={props.busy === "media"}
+                  onChange={(event) => {
+                    const file = event.target.files?.[0];
+                    if (file) props.onUploadHeaderImage(file);
+                  }}
+                />
+              </label>
+              {props.headerImageId ? (
+                <span className="text-xs font-medium text-moon-green">
+                  Uploaded ✓
+                </span>
+              ) : null}
+            </div>
+          ) : null}
+
+          {props.selectedTemplate.parameters.length ? (
+            <div className="grid gap-3 sm:grid-cols-2">
+              {props.selectedTemplate.parameters.map((parameter) => {
+                const mappedField = props.contactFieldMappings[parameter.name];
+                return (
+                  <div
+                    key={parameter.name}
+                    className="grid gap-2 rounded-lg border border-moon-green/12 bg-card p-3"
+                  >
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <span className="text-sm font-medium text-moon-ink">
+                        {parameter.name}
+                      </span>
+                      <Select
+                        value={mappedField || "custom"}
+                        onValueChange={(value) => {
+                          const next = { ...props.contactFieldMappings };
+                          if (value === "custom") {
+                            delete next[parameter.name];
+                          } else {
+                            next[parameter.name] = value as ContactTemplateField;
+                          }
+                          props.setContactFieldMappings(next);
+                        }}
+                      >
+                        <SelectTrigger className="h-8 w-auto min-w-[7.5rem] text-xs">
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="custom">Custom text</SelectItem>
+                          <SelectItem value="name">Contact name</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    </div>
+                    <Input
+                      value={
+                        mappedField === "name"
+                          ? "Contact name"
+                          : props.parameterValues[parameter.name] || ""
+                      }
+                      placeholder={parameter.example || parameter.name}
+                      disabled={Boolean(mappedField)}
+                      onChange={(event) =>
+                        props.setParameterValues({
+                          ...props.parameterValues,
+                          [parameter.name]: event.target.value
+                        })
+                      }
+                      className="h-9 disabled:bg-moon-cream/50"
+                    />
+                  </div>
+                );
+              })}
+            </div>
+          ) : null}
+
+          <Button
+            size="lg"
+            className="justify-center"
+            onClick={props.onSend}
+            disabled={
+              sending ||
+              props.recipientCount === 0 ||
+              (props.selectedTemplate.headerFormat === "IMAGE" &&
+                !props.headerImageId)
+            }
+          >
+            {sending ? <Loader2 className="animate-spin" /> : <Send />}
+            Send to {props.recipientCount.toLocaleString()}
+          </Button>
+
+          <AnimatePresence>
+            {props.progress ? (
+              <motion.div
+                initial={{ opacity: 0, height: 0 }}
+                animate={{ opacity: 1, height: "auto" }}
+                exit={{ opacity: 0, height: 0 }}
+                className="overflow-hidden"
+              >
+                <div className="rounded-xl border border-moon-green/12 bg-muted/40 p-4">
+                  <div className="mb-2 flex flex-wrap items-center justify-between gap-2 text-sm">
+                    <span className="font-medium text-moon-ink">
+                      {props.cancelRequested || props.progress.canceled
+                        ? "Canceling"
+                        : "Sending"}{" "}
+                      {props.progress.sent} of {props.progress.total}
+                    </span>
+                    <span className="font-semibold text-moon-red">{percent}%</span>
+                  </div>
+                  <Progress value={Math.min(percent, 100)} />
+                  <div className="mt-3 grid gap-2 text-xs text-muted-foreground sm:grid-cols-3">
+                    <span>
+                      Accepted:{" "}
+                      <strong className="text-moon-green">
+                        {props.progress.acceptedCount}
+                      </strong>
+                    </span>
+                    <span>
+                      Failed:{" "}
+                      <strong className="text-moon-red">
+                        {props.progress.failedCount}
+                      </strong>
+                    </span>
+                    <span>
+                      Remaining:{" "}
+                      {Math.max(props.progress.total - props.progress.sent, 0)}
+                    </span>
+                  </div>
+                  {props.progress.currentName || props.progress.currentPhone ? (
+                    <p className="mt-2 truncate text-xs text-muted-foreground">
+                      Last: {props.progress.currentName || props.progress.currentPhone}
+                      {props.progress.currentStatus
+                        ? ` · ${props.progress.currentStatus}`
+                        : ""}
+                    </p>
+                  ) : null}
+                  {props.progress.error ? (
+                    <p className="mt-2 line-clamp-2 text-xs text-moon-red">
+                      {props.progress.error}
+                    </p>
+                  ) : null}
+                  {!props.progress.canceled ? (
+                    <Button
+                      variant="outline"
+                      className="mt-3 w-full justify-center border-moon-red/30 text-moon-red hover:bg-moon-red/10 hover:text-moon-red"
+                      onClick={props.onCancel}
+                      disabled={props.cancelRequested}
+                    >
+                      {props.cancelRequested ? (
+                        <Loader2 className="animate-spin" />
+                      ) : (
+                        <X />
+                      )}
+                      {props.cancelRequested ? "Canceling" : "Cancel campaign"}
+                    </Button>
+                  ) : null}
+                </div>
+              </motion.div>
+            ) : null}
+          </AnimatePresence>
+        </div>
+      </Section>
+
+      <Section
+        title="Recipients"
+        description={`${props.recipientCount.toLocaleString()} selected`}
+        action={
+          <Badge variant="secondary" className="gap-1">
+            <Users className="h-3.5 w-3.5" />
+            {props.recipientCount.toLocaleString()}
+          </Badge>
+        }
+      >
+        <div className="grid gap-4">
+          <div className="grid gap-2">
+            <p className="text-sm font-medium text-moon-ink">Lists</p>
+            <div className="flex flex-wrap gap-2">
+              {props.lists.map((list) => {
+                const selected = props.selectedListIds.has(list._id);
+                return (
+                  <button
+                    key={list._id}
+                    type="button"
+                    onClick={() => {
+                      const next = new Set(props.selectedListIds);
+                      if (selected) next.delete(list._id);
+                      else next.add(list._id);
+                      props.setSelectedListIds(next);
+                    }}
+                    className={cn(
+                      "rounded-lg border px-3 py-2 text-sm font-medium transition-colors",
+                      selected
+                        ? "border-moon-green bg-moon-green text-moon-paper"
+                        : "border-moon-green/18 bg-card text-moon-ink hover:bg-moon-cream/50"
+                    )}
+                  >
+                    {list.name}{" "}
+                    <span className="opacity-70">({list.memberCount || 0})</span>
+                  </button>
+                );
+              })}
+              {!props.lists.length ? (
+                <p className="text-sm text-muted-foreground">No lists yet</p>
+              ) : null}
+            </div>
+          </div>
+
+          <div className="relative">
+            <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-moon-ink/40" />
+            <Input
+              value={props.search}
+              onChange={(event) => props.setSearch(event.target.value)}
+              placeholder="Search contacts"
+              className="pl-9"
+            />
+          </div>
+
+          <div className="rounded-xl border border-moon-green/12">
+            <ScrollArea className="h-[420px]">
+              {props.contacts.map((contact) => {
+                const selected = props.selectedContactIds.has(contact._id);
+                return (
+                  <label
+                    key={contact._id}
+                    className="flex cursor-pointer items-center gap-3 border-b border-moon-green/8 px-3 py-3 last:border-0 hover:bg-moon-cream/30"
+                  >
+                    <Checkbox
+                      checked={selected}
+                      onCheckedChange={() => {
+                        const next = new Set(props.selectedContactIds);
+                        if (selected) next.delete(contact._id);
+                        else next.add(contact._id);
+                        props.setSelectedContactIds(next);
+                      }}
+                    />
+                    <span className="min-w-0">
+                      <span className="block truncate text-sm font-medium text-moon-ink">
+                        {contact.name}
+                      </span>
+                      <span className="block truncate text-xs text-muted-foreground">
+                        +{contact.phone}
+                        {contact.source ? ` · ${contact.source}` : ""}
+                      </span>
+                    </span>
+                  </label>
+                );
+              })}
+              {!props.contacts.length ? (
+                <p className="p-4 text-sm text-muted-foreground">
+                  No matching contacts
+                </p>
+              ) : null}
+            </ScrollArea>
+          </div>
+        </div>
+      </Section>
+    </motion.div>
+  );
+}

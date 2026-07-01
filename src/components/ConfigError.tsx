@@ -1,7 +1,7 @@
 export function ConfigError({ message }: { message: string }) {
   return (
     <main className="flex min-h-screen items-center justify-center px-4 py-10">
-      <section className="w-full max-w-3xl rounded-lg border border-moon-red/20 bg-white p-6 shadow-soft">
+      <section className="w-full max-w-3xl rounded-2xl border border-moon-red/20 bg-card p-6 shadow-soft">
         <p className="text-sm font-semibold uppercase tracking-[0.18em] text-moon-red">
           Deployment configuration
         </p>
