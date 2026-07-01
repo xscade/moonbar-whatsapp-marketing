@@ -30,6 +30,7 @@ export type TemplatePreviewData = {
   headerType?: TemplateHeaderType;
   headerText?: string;
   headerFilename?: string;
+  headerMediaUrl?: string;
   body?: string;
   footer?: string;
   buttons?: TemplateButton[];
@@ -44,11 +45,14 @@ export function TemplatePreview({
   className?: string;
 }) {
   const samples = data.samples ?? {};
-  const isMedia =
-    data.headerType === "image" ||
-    data.headerType === "video" ||
-    data.headerType === "document";
+  const isImage = data.headerType === "image";
+  const isVideo = data.headerType === "video";
+  const isMedia = isImage || isVideo || data.headerType === "document";
   const MediaIcon = isMedia ? mediaIcon[data.headerType as keyof typeof mediaIcon] : null;
+  const showMedia =
+    !!data.headerMediaUrl &&
+    (data.headerMediaUrl.startsWith("blob:") ||
+      data.headerMediaUrl.startsWith("http"));
   const buttons = data.buttons ?? [];
 
   return (
@@ -60,14 +64,31 @@ export function TemplatePreview({
       )}
     >
       <div className="max-w-[19rem] rounded-xl rounded-tl-sm bg-white p-2.5 shadow-sm">
-        {MediaIcon ? (
-          <div className="mb-2 flex h-32 items-center justify-center rounded-lg bg-moon-green/10 text-moon-green/70">
-            <div className="flex flex-col items-center gap-1">
-              <MediaIcon className="h-8 w-8" />
-              <span className="max-w-[14rem] truncate px-2 text-[11px] text-moon-ink/50">
-                {data.headerFilename || `${data.headerType} header`}
-              </span>
-            </div>
+        {isMedia ? (
+          <div className="mb-2 overflow-hidden rounded-lg bg-moon-green/10">
+            {isImage && showMedia ? (
+              // eslint-disable-next-line @next/next/no-img-element
+              <img
+                src={data.headerMediaUrl}
+                alt="header"
+                className="h-36 w-full object-cover"
+              />
+            ) : isVideo && showMedia ? (
+              <video
+                src={data.headerMediaUrl}
+                className="h-36 w-full object-cover"
+                controls
+              />
+            ) : (
+              <div className="flex h-32 items-center justify-center text-moon-green/70">
+                <div className="flex flex-col items-center gap-1">
+                  {MediaIcon ? <MediaIcon className="h-8 w-8" /> : null}
+                  <span className="max-w-[14rem] truncate px-2 text-[11px] text-moon-ink/50">
+                    {data.headerFilename || `${data.headerType} header`}
+                  </span>
+                </div>
+              </div>
+            )}
           </div>
         ) : null}
 

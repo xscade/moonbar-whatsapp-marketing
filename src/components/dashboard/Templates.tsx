@@ -9,6 +9,7 @@ import {
   Pencil,
   RefreshCw,
   Search,
+  Sparkles,
   Tag,
   Trash2
 } from "lucide-react";
@@ -21,6 +22,7 @@ import { staggerContainer } from "@/lib/motion";
 import { cn } from "@/lib/utils";
 import { Section } from "./Section";
 import { TemplateBuilder } from "./TemplateBuilder";
+import { TemplateLibraryDialog } from "./TemplateLibraryDialog";
 import { TemplatePreview, type TemplatePreviewData } from "./TemplatePreview";
 
 const STATUS_FILTERS = [
@@ -96,6 +98,7 @@ export function Templates({
   const [query, setQuery] = React.useState("");
   const [filter, setFilter] = React.useState<StatusFilter>("all");
   const [builderOpen, setBuilderOpen] = React.useState(false);
+  const [libraryOpen, setLibraryOpen] = React.useState(false);
   const [mode, setMode] = React.useState<"create" | "edit">("create");
   const [editing, setEditing] = React.useState<MessageTemplate | null>(null);
   const [initial, setInitial] = React.useState<MessageTemplate | null>(null);
@@ -133,6 +136,13 @@ export function Templates({
     setBuilderOpen(true);
   }
 
+  function useLibraryTemplate(template: MessageTemplate) {
+    setMode("create");
+    setEditing(null);
+    setInitial(template);
+    setBuilderOpen(true);
+  }
+
   return (
     <motion.div
       variants={staggerContainer}
@@ -148,6 +158,10 @@ export function Templates({
             <Button variant="outline" size="sm" onClick={onSync} disabled={busy === "sync"}>
               <RefreshCw className={busy === "sync" ? "animate-spin" : ""} />
               Sync
+            </Button>
+            <Button variant="outline" size="sm" onClick={() => setLibraryOpen(true)}>
+              <Sparkles />
+              Library
             </Button>
             <Button size="sm" onClick={openCreate}>
               <MessageSquarePlus />
@@ -291,6 +305,12 @@ export function Templates({
         submitting={busy === "template"}
         onSubmit={(payload) => onSubmitTemplate(payload, editing?._id)}
         onUploadMedia={onUploadTemplateMedia}
+      />
+
+      <TemplateLibraryDialog
+        open={libraryOpen}
+        onOpenChange={setLibraryOpen}
+        onPick={useLibraryTemplate}
       />
     </motion.div>
   );

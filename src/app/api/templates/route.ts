@@ -2,7 +2,11 @@ import { error, handleRouteError, json, requireUser } from "@/lib/api";
 import { getDb } from "@/lib/mongodb";
 import { serializeDocs } from "@/lib/serializers";
 import { graphPost } from "@/lib/whatsapp";
-import { buildTemplateComponents, templateDocFromPayload } from "@/lib/whatsapp/templates";
+import {
+  buildTemplateComponents,
+  detectParameterFormat,
+  templateDocFromPayload
+} from "@/lib/whatsapp/templates";
 import { builderSchema, metaErrorMessage } from "@/lib/whatsapp/templateSchema";
 
 export async function GET() {
@@ -32,12 +36,13 @@ export async function POST(request: Request) {
     if (!wabaId) return error("WHATSAPP_BUSINESS_ACCOUNT_ID is required", 500);
 
     const payload = parsed.data;
+    const format = detectParameterFormat(payload);
     const response = await graphPost(`${wabaId}/message_templates`, {
       name: payload.name,
       language: payload.language,
       category: payload.category,
-      parameter_format: "NAMED",
-      components: buildTemplateComponents(payload)
+      parameter_format: format,
+      components: buildTemplateComponents(payload, format)
     });
 
     if (!response.ok) {

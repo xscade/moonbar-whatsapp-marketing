@@ -392,6 +392,8 @@ async function processCampaignBatch({
       language,
       parameters: resolvedParameters,
       parameterOrder,
+      parameterFormat:
+        (template?.parameterFormat as "NAMED" | "POSITIONAL") || "NAMED",
       headerImageId
     });
 

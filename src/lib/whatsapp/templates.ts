@@ -101,25 +101,55 @@ export function extractTemplate(template: MetaTemplate) {
   };
 }
 
-// Converts the flat builder payload into Meta's `components` array (NAMED format).
-export function buildTemplateComponents(payload: TemplateBuilderPayload) {
+// Detects whether the template uses positional ({{1}}) or named ({{name}})
+// variables. Meta infers this from the placeholder tokens, so the example
+// fields and parameter_format must match — mixing them triggers errors such as
+// "component of type BODY is missing expected field(s) (example)".
+export function detectParameterFormat(
+  payload: TemplateBuilderPayload
+): "NAMED" | "POSITIONAL" {
+  const vars = [
+    ...namedVariables(payload.body),
+    ...(payload.headerType === "text"
+      ? namedVariables(payload.headerText || "")
+      : [])
+  ];
+  if (!vars.length) return "NAMED";
+  return vars.every((name) => /^\d+$/.test(name)) ? "POSITIONAL" : "NAMED";
+}
+
+function orderVariables(vars: string[], format: "NAMED" | "POSITIONAL") {
+  return format === "POSITIONAL"
+    ? [...vars].sort((a, b) => Number(a) - Number(b))
+    : vars;
+}
+
+// Converts the flat builder payload into Meta's `components` array.
+export function buildTemplateComponents(
+  payload: TemplateBuilderPayload,
+  format: "NAMED" | "POSITIONAL" = detectParameterFormat(payload)
+) {
   const components: Array<Record<string, unknown>> = [];
   const samples = payload.samples ?? {};
+  const sampleFor = (name: string) => samples[name] || name;
 
   if (payload.headerType === "text" && payload.headerText?.trim()) {
-    const vars = namedVariables(payload.headerText);
+    const vars = orderVariables(namedVariables(payload.headerText), format);
     const header: Record<string, unknown> = {
       type: "HEADER",
       format: "TEXT",
       text: payload.headerText
     };
     if (vars.length) {
-      header.example = {
-        header_text_named_params: vars.map((name) => ({
-          param_name: name,
-          example: samples[name] || name
-        }))
-      };
+      header.example =
+        format === "POSITIONAL"
+          ? { header_text: vars.map(sampleFor) }
+          : {
+              header_text_named_params: vars.map((name) => ({
+                param_name: name,
+                example: sampleFor(name)
+              }))
+            };
     }
     components.push(header);
   } else if (
@@ -135,15 +165,18 @@ export function buildTemplateComponents(payload: TemplateBuilderPayload) {
     });
   }
 
-  const bodyVars = namedVariables(payload.body);
+  const bodyVars = orderVariables(namedVariables(payload.body), format);
   const body: Record<string, unknown> = { type: "BODY", text: payload.body };
   if (bodyVars.length) {
-    body.example = {
-      body_text_named_params: bodyVars.map((name) => ({
-        param_name: name,
-        example: samples[name] || name
-      }))
-    };
+    body.example =
+      format === "POSITIONAL"
+        ? { body_text: [bodyVars.map(sampleFor)] }
+        : {
+            body_text_named_params: bodyVars.map((name) => ({
+              param_name: name,
+              example: sampleFor(name)
+            }))
+          };
   }
   components.push(body);
 
@@ -191,6 +224,7 @@ export function templateDocFromPayload(
   meta: { metaId?: string; status?: string }
 ) {
   const samples = payload.samples ?? {};
+  const format = detectParameterFormat(payload);
   const headerFormat =
     payload.headerType === "none"
       ? undefined
@@ -209,8 +243,8 @@ export function templateDocFromPayload(
     headerText: payload.headerType === "text" ? payload.headerText : undefined,
     footer: payload.footer || undefined,
     buttons: payload.buttons ?? [],
-    parameterFormat: "NAMED" as const,
-    parameters: namedVariables(payload.body).map((name) => ({
+    parameterFormat: format,
+    parameters: orderVariables(namedVariables(payload.body), format).map((name) => ({
       name,
       example: samples[name]
     }))

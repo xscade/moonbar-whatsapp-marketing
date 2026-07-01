@@ -7,6 +7,7 @@ type SendTemplateInput = {
   language: string;
   parameters: Record<string, string>;
   parameterOrder: string[];
+  parameterFormat?: "NAMED" | "POSITIONAL";
   headerImageId?: string;
   headerImageUrl?: string;
 };
@@ -38,11 +39,11 @@ export async function sendTemplate(input: SendTemplateInput) {
   if (input.parameterOrder.length) {
     components.push({
       type: "body",
-      parameters: input.parameterOrder.map((name) => ({
-        type: "text",
-        parameter_name: name,
-        text: input.parameters[name] || ""
-      }))
+      parameters: input.parameterOrder.map((name) =>
+        input.parameterFormat === "POSITIONAL"
+          ? { type: "text", text: input.parameters[name] || "" }
+          : { type: "text", parameter_name: name, text: input.parameters[name] || "" }
+      )
     });
   }
 

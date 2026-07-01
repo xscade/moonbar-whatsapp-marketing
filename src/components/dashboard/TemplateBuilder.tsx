@@ -66,6 +66,26 @@ function normalizeName(value: string) {
   return value.toLowerCase().replace(/[^a-z0-9_]/g, "_").replace(/_+/g, "_");
 }
 
+const DRAFT_KEY = "moonbar:template-draft";
+
+// WhatsApp/Meta template body rules that Meta rejects on submit.
+function bodyIssues(body: string): string[] {
+  const issues: string[] = [];
+  const trimmed = body.trim();
+  if (trimmed && /{{\s*[^{}]+\s*}}\s*$/.test(trimmed)) {
+    issues.push(
+      "Body can't end with a variable — WhatsApp needs text after the last variable."
+    );
+  }
+  if (trimmed && /^\s*{{\s*[^{}]+\s*}}/.test(trimmed)) {
+    issues.push("Body can't start with a variable — add text before it.");
+  }
+  if (/}}\s*{{/.test(body)) {
+    issues.push("Variables can't be next to each other — add text between them.");
+  }
+  return issues;
+}
+
 type BuilderState = {
   name: string;
   language: string;
@@ -139,13 +159,37 @@ export function TemplateBuilder({
   ) => Promise<{ handle: string; filename: string } | null>;
 }) {
   const [state, setState] = React.useState<BuilderState>(EMPTY);
+  const [headerPreviewUrl, setHeaderPreviewUrl] = React.useState("");
   const [uploading, setUploading] = React.useState(false);
   const fileRef = React.useRef<HTMLInputElement>(null);
 
+  // Hydrate on open: edit/duplicate from the template, otherwise restore a draft.
   React.useEffect(() => {
     if (!open) return;
-    setState(initial ? fromTemplate(initial) : EMPTY);
-  }, [open, initial]);
+    setHeaderPreviewUrl("");
+    if (initial) {
+      setState(fromTemplate(initial));
+      return;
+    }
+    if (mode === "create" && typeof window !== "undefined") {
+      const saved = window.localStorage.getItem(DRAFT_KEY);
+      if (saved) {
+        try {
+          setState({ ...EMPTY, ...(JSON.parse(saved) as Partial<BuilderState>) });
+          return;
+        } catch {
+          // ignore a malformed draft
+        }
+      }
+    }
+    setState(EMPTY);
+  }, [open, initial, mode]);
+
+  // Auto-save the draft (create mode only) so accidental exits don't lose work.
+  React.useEffect(() => {
+    if (!open || mode !== "create" || typeof window === "undefined") return;
+    window.localStorage.setItem(DRAFT_KEY, JSON.stringify(state));
+  }, [state, open, mode]);
 
   const set = <K extends keyof BuilderState>(key: K, value: BuilderState[K]) =>
     setState((prev) => ({ ...prev, [key]: value }));
@@ -165,10 +209,12 @@ export function TemplateBuilder({
 
   const missingSamples = variables.filter((name) => !state.samples[name]?.trim());
   const needsMedia = isMediaHeader && !state.headerHandle;
+  const validation = React.useMemo(() => bodyIssues(state.body), [state.body]);
   const canSubmit =
     state.name.trim().length > 0 &&
     state.body.trim().length > 0 &&
     missingSamples.length === 0 &&
+    validation.length === 0 &&
     !needsMedia &&
     !submitting &&
     !uploading;
@@ -183,6 +229,7 @@ export function TemplateBuilder({
     try {
       const result = await onUploadMedia(file);
       if (result) {
+        setHeaderPreviewUrl(URL.createObjectURL(file));
         setState((prev) => ({
           ...prev,
           headerHandle: result.handle,
@@ -192,6 +239,12 @@ export function TemplateBuilder({
     } finally {
       setUploading(false);
     }
+  }
+
+  function discardDraft() {
+    if (typeof window !== "undefined") window.localStorage.removeItem(DRAFT_KEY);
+    setState(EMPTY);
+    setHeaderPreviewUrl("");
   }
 
   function updateButton(index: number, patch: Partial<TemplateButton>) {
@@ -225,7 +278,10 @@ export function TemplateBuilder({
       buttons: state.buttons
     };
     const ok = await onSubmit(payload);
-    if (ok) onOpenChange(false);
+    if (ok) {
+      if (typeof window !== "undefined") window.localStorage.removeItem(DRAFT_KEY);
+      onOpenChange(false);
+    }
   }
 
   const mediaAccept =
@@ -386,6 +442,11 @@ export function TemplateBuilder({
               <p className="text-xs text-muted-foreground">
                 Wrap variables in double braces, e.g. <code>{"{{name}}"}</code>.
               </p>
+              {validation.map((message) => (
+                <p key={message} className="text-xs font-medium text-moon-red">
+                  {message}
+                </p>
+              ))}
             </div>
 
             {/* Variable samples */}
@@ -549,12 +610,18 @@ export function TemplateBuilder({
                 headerType: state.headerType,
                 headerText: state.headerText,
                 headerFilename: state.headerFilename,
+                headerMediaUrl: headerPreviewUrl,
                 body: state.body,
                 footer: state.footer,
                 buttons: state.buttons,
                 samples: state.samples
               }}
             />
+            {validation.map((message) => (
+              <p key={message} className="text-xs text-moon-red">
+                {message}
+              </p>
+            ))}
             {needsMedia ? (
               <p className="text-xs text-moon-red">Upload a sample file to continue.</p>
             ) : null}
@@ -567,6 +634,18 @@ export function TemplateBuilder({
         </div>
 
         <div className="flex items-center justify-end gap-2 border-t border-moon-green/10 p-4">
+          {mode === "create" ? (
+            <span className="mr-auto text-xs text-muted-foreground">
+              Draft auto-saved ·{" "}
+              <button
+                type="button"
+                onClick={discardDraft}
+                className="font-medium text-moon-red underline-offset-2 hover:underline"
+              >
+                Clear
+              </button>
+            </span>
+          ) : null}
           <Button variant="outline" onClick={() => onOpenChange(false)}>
             Cancel
           </Button>
