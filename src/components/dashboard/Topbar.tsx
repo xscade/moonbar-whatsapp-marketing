@@ -1,6 +1,7 @@
 "use client";
 
 import {
+  Bell,
   LogOut,
   Menu,
   PanelLeftClose,
@@ -9,6 +10,7 @@ import {
   Search,
   Settings as SettingsIcon
 } from "lucide-react";
+import { formatDistanceToNow } from "date-fns";
 
 import type { AdminUser } from "@/types/entities";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
@@ -22,7 +24,14 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger
 } from "@/components/ui/dropdown-menu";
-import { tabs, type TabKey } from "./types";
+import { tabs, type DashboardNotification, type TabKey } from "./types";
+
+const notificationTone: Record<DashboardNotification["kind"], string> = {
+  inbound: "#414C2F",
+  template: "#BB5524",
+  failed: "#BA401D",
+  info: "#7F6F34"
+};
 
 function initials(name: string) {
   return (
@@ -47,7 +56,11 @@ export function Topbar({
   onToggleCollapse,
   onOpenMobile,
   onSelect,
-  onLogout
+  onLogout,
+  notifications,
+  unreadCount,
+  onMarkNotificationsRead,
+  onNotificationClick
 }: {
   user: AdminUser;
   activeTab: TabKey;
@@ -60,6 +73,10 @@ export function Topbar({
   onOpenMobile: () => void;
   onSelect: (tab: TabKey) => void;
   onLogout: () => void;
+  notifications: DashboardNotification[];
+  unreadCount: number;
+  onMarkNotificationsRead: () => void;
+  onNotificationClick: (notification: DashboardNotification) => void;
 }) {
   const current = tabs.find((tab) => tab.key === activeTab);
   const loading = busy === "loading";
@@ -120,6 +137,68 @@ export function Topbar({
         >
           <RefreshCw className={loading ? "animate-spin" : ""} />
         </Button>
+
+        <DropdownMenu
+          onOpenChange={(open) => {
+            if (open) onMarkNotificationsRead();
+          }}
+        >
+          <DropdownMenuTrigger asChild>
+            <Button
+              variant="outline"
+              size="icon"
+              className="relative h-9 w-9"
+              aria-label="Notifications"
+            >
+              <Bell />
+              {unreadCount > 0 ? (
+                <span className="absolute -right-1 -top-1 flex h-4 min-w-4 items-center justify-center rounded-full bg-moon-red px-1 text-[10px] font-semibold leading-none text-white">
+                  {unreadCount > 9 ? "9+" : unreadCount}
+                </span>
+              ) : null}
+            </Button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="end" className="w-80 p-0">
+            <div className="px-3 py-2.5 text-sm font-semibold text-moon-ink">
+              Notifications
+            </div>
+            <DropdownMenuSeparator className="my-0" />
+            <div className="max-h-80 overflow-y-auto p-1 moon-scrollbar">
+              {notifications.length ? (
+                notifications.slice(0, 15).map((notification) => (
+                  <DropdownMenuItem
+                    key={notification.id}
+                    onSelect={() => onNotificationClick(notification)}
+                    className="items-start gap-2.5"
+                  >
+                    <span
+                      className="mt-1.5 h-2 w-2 shrink-0 rounded-full"
+                      style={{ backgroundColor: notificationTone[notification.kind] }}
+                    />
+                    <span className="min-w-0 flex-1">
+                      <span className="block truncate text-sm font-medium text-moon-ink">
+                        {notification.title}
+                      </span>
+                      {notification.description ? (
+                        <span className="block truncate text-xs text-muted-foreground">
+                          {notification.description}
+                        </span>
+                      ) : null}
+                      <span className="mt-0.5 block text-[11px] text-moon-ink/40">
+                        {formatDistanceToNow(new Date(notification.createdAt))} ago
+                      </span>
+                    </span>
+                  </DropdownMenuItem>
+                ))
+              ) : (
+                <div className="grid place-items-center gap-1 px-3 py-8 text-center text-sm text-muted-foreground">
+                  <Bell className="h-5 w-5 text-moon-green/40" />
+                  You&apos;re all caught up
+                </div>
+              )}
+            </div>
+          </DropdownMenuContent>
+        </DropdownMenu>
 
         <DropdownMenu>
           <DropdownMenuTrigger asChild>

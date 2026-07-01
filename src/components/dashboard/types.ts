@@ -39,6 +39,17 @@ export const tabs: Array<{
 
 export const palette = ["#414C2F", "#BA401D", "#BB5524", "#7F6F34", "#E7A356"];
 
+export type DashboardNotification = {
+  id: string;
+  kind: "inbound" | "template" | "failed" | "info";
+  title: string;
+  description?: string;
+  createdAt: string;
+  phone?: string;
+  tab?: TabKey;
+  read?: boolean;
+};
+
 export const fallbackTemplate: MessageTemplate = {
   _id: "event_details_reminder_1",
   name: "event_details_reminder_1",

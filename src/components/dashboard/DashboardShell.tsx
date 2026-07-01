@@ -7,7 +7,7 @@ import type { AdminUser } from "@/types/entities";
 import { pageTransition } from "@/lib/motion";
 import { Sidebar } from "./Sidebar";
 import { Topbar } from "./Topbar";
-import type { TabKey } from "./types";
+import type { DashboardNotification, TabKey } from "./types";
 
 export function DashboardShell({
   user,
@@ -18,6 +18,10 @@ export function DashboardShell({
   onRefresh,
   busy,
   onLogout,
+  notifications,
+  unreadCount,
+  onMarkNotificationsRead,
+  onNotificationClick,
   children
 }: {
   user: AdminUser;
@@ -28,6 +32,10 @@ export function DashboardShell({
   onRefresh: () => void;
   busy: string;
   onLogout: () => void;
+  notifications: DashboardNotification[];
+  unreadCount: number;
+  onMarkNotificationsRead: () => void;
+  onNotificationClick: (notification: DashboardNotification) => void;
   children: React.ReactNode;
 }) {
   const [collapsed, setCollapsed] = React.useState(false);
@@ -93,6 +101,10 @@ export function DashboardShell({
           onOpenMobile={() => setMobileOpen(true)}
           onSelect={onSelect}
           onLogout={onLogout}
+          notifications={notifications}
+          unreadCount={unreadCount}
+          onMarkNotificationsRead={onMarkNotificationsRead}
+          onNotificationClick={onNotificationClick}
         />
 
         <main className="flex-1 px-4 py-6 lg:px-6">

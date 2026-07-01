@@ -28,6 +28,7 @@ import {
   palette,
   type CampaignBatchResult,
   type CampaignProgress,
+  type DashboardNotification,
   type TabKey,
   type WebhookEvent,
   type WhatsAppMessage,
@@ -86,6 +87,53 @@ export function DashboardClient({ user }: DashboardClientProps) {
   const [sendProgress, setSendProgress] = useState<CampaignProgress | null>(null);
   const [cancelSendRequested, setCancelSendRequested] = useState(false);
   const cancelSendRequestedRef = useRef(false);
+
+  const [notifications, setNotifications] = useState<DashboardNotification[]>([]);
+  const [lastSeenAt, setLastSeenAt] = useState(0);
+  const [inboxFocusPhone, setInboxFocusPhone] = useState("");
+  const messageStatusRef = useRef<Map<string, string>>(new Map());
+  const notifSeededRef = useRef(false);
+  const templateStatusRef = useRef<Map<string, string>>(new Map());
+  const templatesSeededRef = useRef(false);
+  const webhookSeededRef = useRef(false);
+  const webhookSeenRef = useRef<Set<string>>(new Set());
+
+  const unreadCount = notifications.filter(
+    (item) => new Date(item.createdAt).getTime() > lastSeenAt
+  ).length;
+
+  function pushNotifications(items: DashboardNotification[]) {
+    if (!items.length) return;
+    setNotifications((current) => {
+      const existing = new Set(current.map((item) => item.id));
+      const fresh = items.filter((item) => !existing.has(item.id));
+      if (!fresh.length) return current;
+      for (const item of fresh) {
+        if (item.kind === "inbound") toast(item.title, { description: item.description });
+        else if (item.kind === "template") toast.success(item.title);
+        else if (item.kind === "failed") toast.error(item.title, { description: item.description });
+        else if (item.kind === "info") toast(item.title, { description: item.description });
+      }
+      return [...fresh, ...current].slice(0, 50);
+    });
+  }
+
+  function markNotificationsRead() {
+    const now = Date.now();
+    setLastSeenAt(now);
+    if (typeof window !== "undefined") {
+      window.localStorage.setItem("moonbar:notif-seen", String(now));
+    }
+  }
+
+  function handleNotificationClick(notification: DashboardNotification) {
+    if (notification.tab) setActiveTab(notification.tab);
+    else if (notification.phone) setActiveTab("inbox");
+    if (notification.phone) {
+      setInboxFocusPhone(notification.phone.replace(/[^\d]/g, ""));
+    }
+    markNotificationsRead();
+  }
 
   // Toast-based notifier (replaces the old inline notice banner).
   const setNotice = (message: string) => {
@@ -207,6 +255,37 @@ export function DashboardClient({ user }: DashboardClientProps) {
     }
   }
 
+  async function sendInboxTemplate(input: {
+    to: string;
+    templateName: string;
+    language: string;
+    parameters: Record<string, string>;
+    parameterOrder: string[];
+    parameterFormat?: "NAMED" | "POSITIONAL";
+    headerImageId?: string;
+    contactName?: string;
+  }) {
+    setBusy(`chat-send-${input.to}`);
+    try {
+      const result = await api<{ ok: boolean; error?: string }>(
+        "/api/messages/send-template",
+        { method: "POST", body: JSON.stringify(input) }
+      );
+      await refreshMessages();
+      if (!result.ok) {
+        toast.error(result.error || "Template could not be sent");
+        return false;
+      }
+      toast.success("Template sent");
+      return true;
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Template could not be sent");
+      return false;
+    } finally {
+      setBusy("");
+    }
+  }
+
   async function fetchListContacts(listId: string) {
     const result = await api<{ data: Contact[] }>(
       `/api/contacts?listId=${encodeURIComponent(listId)}&limit=20000`
@@ -249,6 +328,193 @@ export function DashboardClient({ user }: DashboardClientProps) {
     setHeaderImageId("");
     setHeaderImageName("");
   }, [selectedTemplateName]);
+
+  // Load persisted notification "seen" marker.
+  useEffect(() => {
+    const saved =
+      typeof window !== "undefined"
+        ? window.localStorage.getItem("moonbar:notif-seen")
+        : null;
+    if (saved) setLastSeenAt(Number(saved) || 0);
+  }, []);
+
+  // Background polling so the inbox and notifications update without a manual
+  // refresh (visibility-aware; faster cadence while Inbox is open).
+  useEffect(() => {
+    const pollMessages = async () => {
+      if (typeof document !== "undefined" && document.hidden) return;
+      try {
+        const res = await api<{
+          messages: WhatsAppMessage[];
+          statuses: WhatsAppStatus[];
+          events: WebhookEvent[];
+        }>("/api/messages");
+        setMessages(res.messages);
+        setStatuses(res.statuses);
+        setWebhookEvents(res.events);
+      } catch {
+        // ignore transient poll errors
+      }
+    };
+    const pollTemplates = async () => {
+      if (typeof document !== "undefined" && document.hidden) return;
+      try {
+        const res = await api<{ data: MessageTemplate[] }>("/api/templates");
+        setTemplates(res.data.length ? res.data : [fallbackTemplate]);
+      } catch {
+        // ignore
+      }
+    };
+    const onVisible = () => {
+      if (!document.hidden) {
+        void pollMessages();
+        void pollTemplates();
+      }
+    };
+    document.addEventListener("visibilitychange", onVisible);
+    if (activeTab === "inbox") void pollMessages();
+    const messageInterval = activeTab === "inbox" ? 3000 : 10000;
+    const messageTimer = setInterval(pollMessages, messageInterval);
+    const templateTimer = setInterval(pollTemplates, 30000);
+    return () => {
+      clearInterval(messageTimer);
+      clearInterval(templateTimer);
+      document.removeEventListener("visibilitychange", onVisible);
+    };
+  }, [activeTab]);
+
+  // Notifications from new inbound messages and outbound send failures.
+  useEffect(() => {
+    const statusMap = messageStatusRef.current;
+    const first = !notifSeededRef.current;
+    const items: DashboardNotification[] = [];
+    for (const message of messages) {
+      const previous = statusMap.get(message._id);
+      const isNew = previous === undefined;
+      statusMap.set(message._id, message.lastStatus || "");
+      if (first) continue;
+      if (isNew && message.direction === "inbound") {
+        items.push({
+          id: `inbound-${message._id}`,
+          kind: "inbound",
+          title: `New message from ${message.contactName || `+${message.from}`}`,
+          description: message.text || message.templateName,
+          createdAt: message.createdAt,
+          phone: message.from,
+          tab: "inbox"
+        });
+      } else if (
+        message.direction === "outbound" &&
+        message.lastStatus === "failed" &&
+        previous !== "failed"
+      ) {
+        items.push({
+          id: `failed-${message._id}`,
+          kind: "failed",
+          title: `Message to ${message.contactName || `+${message.to}`} failed`,
+          description: message.templateName || message.text,
+          createdAt: message.createdAt,
+          phone: message.to,
+          tab: "inbox"
+        });
+      }
+    }
+    if (first && messages.length) notifSeededRef.current = true;
+    pushNotifications(items);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [messages]);
+
+  // Notifications from template status transitions (approval, rejection…).
+  useEffect(() => {
+    const statusMap = templateStatusRef.current;
+    const first = !templatesSeededRef.current;
+    const items: DashboardNotification[] = [];
+    for (const template of templates) {
+      const key = `${template.name}:${template.language}`;
+      const previous = statusMap.get(key);
+      const status = (template.status || "").toUpperCase();
+      statusMap.set(key, status);
+      if (first) continue;
+      if (
+        previous &&
+        previous !== status &&
+        ["APPROVED", "REJECTED", "PAUSED", "DISABLED"].includes(status)
+      ) {
+        items.push({
+          id: `tpl-${key}-${status}`,
+          kind: "template",
+          title: `Template ${template.name} ${status.toLowerCase()}`,
+          createdAt: new Date().toISOString(),
+          tab: "templates"
+        });
+      }
+    }
+    if (first && templates.length) templatesSeededRef.current = true;
+    pushNotifications(items);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [templates]);
+
+  // Faster template / Meta webhook notifications from stored webhook payloads.
+  useEffect(() => {
+    const first = !webhookSeededRef.current;
+    const items: DashboardNotification[] = [];
+    for (const event of webhookEvents) {
+      if (webhookSeenRef.current.has(event._id)) continue;
+      webhookSeenRef.current.add(event._id);
+      if (first) continue;
+
+      const payload = event.payload as {
+        entry?: Array<{
+          changes?: Array<{ field: string; value: Record<string, unknown> }>;
+        }>;
+      };
+
+      for (const entry of payload.entry ?? []) {
+        for (const change of entry.changes ?? []) {
+          if (change.field === "message_template_status_update") {
+            const name = String(
+              change.value.message_template_name || change.value.name || "template"
+            );
+            const language = String(
+              change.value.message_template_language || change.value.language || ""
+            );
+            const status = String(
+              change.value.event || change.value.message_template_status || "updated"
+            ).toUpperCase();
+            items.push({
+              id: `tpl-${name}:${language}-${status}`,
+              kind: "template",
+              title: `Template ${name} ${status.toLowerCase()}`,
+              createdAt: event.createdAt,
+              tab: "templates"
+            });
+          } else if (change.field === "message_template_quality_update") {
+            const name = String(change.value.message_template_name || "template");
+            items.push({
+              id: `tpl-quality-${event._id}`,
+              kind: "info",
+              title: `Template ${name} quality updated`,
+              description: String(change.value.new_quality_score || ""),
+              createdAt: event.createdAt,
+              tab: "templates"
+            });
+          } else if (change.field === "phone_number_quality_update") {
+            items.push({
+              id: `phone-quality-${event._id}`,
+              kind: "info",
+              title: "Phone number quality update",
+              description: String(change.value.current_limit || change.value.event || ""),
+              createdAt: event.createdAt,
+              tab: "settings"
+            });
+          }
+        }
+      }
+    }
+    if (first && webhookEvents.length) webhookSeededRef.current = true;
+    pushNotifications(items);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [webhookEvents]);
 
   async function logout() {
     await fetch("/api/auth/logout", { method: "POST" });
@@ -880,6 +1146,10 @@ export function DashboardClient({ user }: DashboardClientProps) {
       onRefresh={refreshAll}
       busy={busy}
       onLogout={logout}
+      notifications={notifications}
+      unreadCount={unreadCount}
+      onMarkNotificationsRead={markNotificationsRead}
+      onNotificationClick={handleNotificationClick}
     >
       {activeTab === "overview" ? (
         <Overview
@@ -900,8 +1170,12 @@ export function DashboardClient({ user }: DashboardClientProps) {
           messages={messages}
           statuses={statuses}
           events={webhookEvents}
+          templates={templates.length ? templates : [fallbackTemplate]}
           busy={busy}
+          focusPhone={inboxFocusPhone}
+          onFocusPhoneHandled={() => setInboxFocusPhone("")}
           onSendMessage={sendInboxMessage}
+          onSendTemplate={sendInboxTemplate}
           onRefresh={async () => {
             setBusy("messages");
             try {

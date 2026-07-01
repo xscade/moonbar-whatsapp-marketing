@@ -1,6 +1,6 @@
 "use client";
 
-import { type FormEvent, useEffect, useMemo, useState } from "react";
+import { type FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import { motion } from "motion/react";
 import { formatDistanceToNow } from "date-fns";
 import {
@@ -12,13 +12,14 @@ import {
   Inbox as InboxIcon,
   Loader2,
   MessageSquareText,
+  Plus,
   RefreshCw,
   Search,
   Send,
   X
 } from "lucide-react";
 
-import type { Contact } from "@/types/entities";
+import type { Contact, MessageTemplate } from "@/types/entities";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -28,8 +29,11 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
 import { staggerContainer } from "@/lib/motion";
 import { cn } from "@/lib/utils";
+import { InboxTemplateDialog } from "./InboxTemplateDialog";
 import { Section } from "./Section";
 import type { WebhookEvent, WhatsAppMessage, WhatsAppStatus } from "./types";
+
+const CS_WINDOW_MS = 24 * 60 * 60 * 1000;
 
 type BadgeVariant = "success" | "secondary" | "muted" | "destructive";
 
@@ -51,6 +55,23 @@ const statusTone: Record<string, BadgeVariant> = {
 
 function phoneKey(phone?: string) {
   return (phone || "").replace(/[^\d]/g, "");
+}
+
+function lastInboundMessage(conversation: ChatConversation) {
+  return [...conversation.messages]
+    .reverse()
+    .find((message) => message.direction === "inbound");
+}
+
+function sessionExpiresAt(conversation: ChatConversation) {
+  const lastInbound = lastInboundMessage(conversation);
+  if (!lastInbound) return null;
+  return new Date(new Date(lastInbound.createdAt).getTime() + CS_WINDOW_MS);
+}
+
+function isSessionOpen(conversation: ChatConversation) {
+  const expiresAt = sessionExpiresAt(conversation);
+  return !!expiresAt && expiresAt.getTime() > Date.now();
 }
 
 function getInitials(name: string) {
@@ -207,18 +228,35 @@ export function Inbox({
   messages,
   statuses,
   events,
+  templates,
   busy,
+  focusPhone,
+  onFocusPhoneHandled,
   onSendMessage,
+  onSendTemplate,
   onRefresh
 }: {
   contacts: Contact[];
   messages: WhatsAppMessage[];
   statuses: WhatsAppStatus[];
   events: WebhookEvent[];
+  templates: MessageTemplate[];
   busy: string;
+  focusPhone?: string;
+  onFocusPhoneHandled?: () => void;
   onSendMessage: (input: {
     to: string;
     text: string;
+    contactName?: string;
+  }) => Promise<boolean>;
+  onSendTemplate: (input: {
+    to: string;
+    templateName: string;
+    language: string;
+    parameters: Record<string, string>;
+    parameterOrder: string[];
+    parameterFormat?: "NAMED" | "POSITIONAL";
+    headerImageId?: string;
     contactName?: string;
   }) => Promise<boolean>;
   onRefresh: () => void;
@@ -227,6 +265,8 @@ export function Inbox({
   const [activePhone, setActivePhone] = useState("");
   const [draft, setDraft] = useState("");
   const [developerOpen, setDeveloperOpen] = useState(false);
+  const [templateOpen, setTemplateOpen] = useState(false);
+  const messagesEndRef = useRef<HTMLDivElement>(null);
 
   const conversations = useMemo(() => {
     const contactByPhone = new Map<string, Contact>();
@@ -286,6 +326,9 @@ export function Inbox({
         };
       })
       .sort((a, b) => {
+        const aOpen = isSessionOpen(a);
+        const bOpen = isSessionOpen(b);
+        if (aOpen !== bOpen) return aOpen ? -1 : 1;
         const aTime = a.latest ? new Date(a.latest.createdAt).getTime() : 0;
         const bTime = b.latest ? new Date(b.latest.createdAt).getTime() : 0;
         if (aTime !== bTime) return bTime - aTime;
@@ -313,6 +356,12 @@ export function Inbox({
   }, [conversations, search]);
 
   useEffect(() => {
+    if (!focusPhone) return;
+    setActivePhone(focusPhone);
+    onFocusPhoneHandled?.();
+  }, [focusPhone, onFocusPhoneHandled]);
+
+  useEffect(() => {
     if (!conversations.length) {
       if (activePhone) setActivePhone("");
       return;
@@ -326,14 +375,24 @@ export function Inbox({
     conversations.find((conversation) => conversation.phone === activePhone) ||
     visibleConversations[0] ||
     conversations[0];
+  const sessionOpen = activeConversation ? isSessionOpen(activeConversation) : false;
+  const sessionExpiry = activeConversation ? sessionExpiresAt(activeConversation) : null;
   const sending = activeConversation
     ? busy === `chat-send-${activeConversation.phone}`
     : false;
 
+  useEffect(() => {
+    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+  }, [
+    activeConversation?.phone,
+    activeConversation?.messages.length,
+    activeConversation?.messages.at(-1)?._id
+  ]);
+
   async function handleSend(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const text = draft.trim();
-    if (!activeConversation || !text || sending) return;
+    if (!activeConversation || !text || sending || !sessionOpen) return;
 
     const sent = await onSendMessage({
       to: activeConversation.phone,
@@ -391,6 +450,7 @@ export function Inbox({
                 {visibleConversations.map((conversation) => {
                   const active = conversation.phone === activeConversation?.phone;
                   const latest = conversation.latest;
+                  const open = isSessionOpen(conversation);
                   return (
                     <button
                       key={conversation.phone}
@@ -408,8 +468,15 @@ export function Inbox({
                       </Avatar>
                       <span className="min-w-0 flex-1">
                         <span className="flex items-center justify-between gap-2">
-                          <span className="truncate font-semibold text-moon-ink">
-                            {conversation.name}
+                          <span className="flex min-w-0 items-center gap-2">
+                            <span className="truncate font-semibold text-moon-ink">
+                              {conversation.name}
+                            </span>
+                            {open ? (
+                              <Badge variant="success" className="shrink-0 px-1.5 py-0 text-[10px]">
+                                24h
+                              </Badge>
+                            ) : null}
                           </span>
                           <span className="shrink-0 text-xs text-muted-foreground">
                             {latest ? timeAgo(latest.createdAt) : ""}
@@ -454,6 +521,20 @@ export function Inbox({
                         <p className="truncate text-sm text-muted-foreground">
                           +{activeConversation.phone}
                         </p>
+                        {sessionOpen && sessionExpiry ? (
+                          <p className="truncate text-xs text-moon-green">
+                            Reply window open · closes{" "}
+                            {formatDistanceToNow(sessionExpiry, { addSuffix: true })}
+                          </p>
+                        ) : lastInboundMessage(activeConversation) ? (
+                          <p className="truncate text-xs text-moon-red/80">
+                            Reply window closed · send an approved template
+                          </p>
+                        ) : (
+                          <p className="truncate text-xs text-muted-foreground">
+                            No inbound messages yet · start with a template
+                          </p>
+                        )}
                       </div>
                     </div>
                     <div className="flex items-center gap-2">
@@ -476,6 +557,7 @@ export function Inbox({
                       {activeConversation.messages.map((message) => (
                         <MessageBubble key={message._id} message={message} />
                       ))}
+                      <div ref={messagesEndRef} />
                       {!activeConversation.messages.length ? (
                         <div className="grid min-h-[480px] place-items-center text-center text-sm text-muted-foreground">
                           <div>
@@ -489,8 +571,19 @@ export function Inbox({
 
                   <form
                     onSubmit={handleSend}
-                    className="flex items-end gap-3 border-t border-moon-green/12 bg-[#F7F3EA] p-3"
+                    className="flex items-end gap-2 border-t border-moon-green/12 bg-[#F7F3EA] p-3"
                   >
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="icon"
+                      className="h-11 w-11 shrink-0 rounded-full"
+                      onClick={() => setTemplateOpen(true)}
+                      disabled={sending}
+                      title="Send approved template"
+                    >
+                      <Plus />
+                    </Button>
                     <Textarea
                       value={draft}
                       onChange={(event) => setDraft(event.target.value)}
@@ -500,20 +593,34 @@ export function Inbox({
                           event.currentTarget.form?.requestSubmit();
                         }
                       }}
-                      placeholder="Message"
+                      placeholder={
+                        sessionOpen
+                          ? "Message"
+                          : "24-hour window closed — use + to send a template"
+                      }
                       className="min-h-11 resize-none rounded-2xl bg-white"
-                      disabled={sending}
+                      disabled={sending || !sessionOpen}
                     />
                     <Button
                       type="submit"
                       size="icon"
-                      className="h-11 w-11 rounded-full"
-                      disabled={!draft.trim() || sending}
+                      className="h-11 w-11 shrink-0 rounded-full"
+                      disabled={!draft.trim() || sending || !sessionOpen}
                       title="Send message"
                     >
                       {sending ? <Loader2 className="animate-spin" /> : <Send />}
                     </Button>
                   </form>
+
+                  <InboxTemplateDialog
+                    open={templateOpen}
+                    onOpenChange={setTemplateOpen}
+                    templates={templates}
+                    phone={activeConversation.phone}
+                    contactName={activeConversation.name}
+                    sending={sending}
+                    onSend={onSendTemplate}
+                  />
                 </>
               ) : (
                 <div className="grid flex-1 place-items-center p-8 text-center text-sm text-muted-foreground">
