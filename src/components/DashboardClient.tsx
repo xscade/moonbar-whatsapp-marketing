@@ -361,19 +361,20 @@ export function DashboardClient({ user }: DashboardClientProps) {
     const unlock = () => {
       void ensureNotificationAudioReady();
     };
+    unlock();
     window.addEventListener("pointerdown", unlock);
     window.addEventListener("keydown", unlock);
+    window.addEventListener("touchstart", unlock);
     return () => {
       window.removeEventListener("pointerdown", unlock);
       window.removeEventListener("keydown", unlock);
+      window.removeEventListener("touchstart", unlock);
     };
   }, []);
 
-  // Background polling so the inbox and notifications update without a manual
-  // refresh (visibility-aware; faster cadence while Inbox is open).
+  // Background polling keeps notifications current even when the tab is hidden.
   useEffect(() => {
     const pollMessages = async () => {
-      if (typeof document !== "undefined" && document.hidden) return;
       try {
         const res = await api<{
           messages: WhatsAppMessage[];
@@ -388,7 +389,6 @@ export function DashboardClient({ user }: DashboardClientProps) {
       }
     };
     const pollTemplates = async () => {
-      if (typeof document !== "undefined" && document.hidden) return;
       try {
         const res = await api<{ data: MessageTemplate[] }>("/api/templates");
         setTemplates(res.data.length ? res.data : [fallbackTemplate]);
@@ -403,7 +403,7 @@ export function DashboardClient({ user }: DashboardClientProps) {
       }
     };
     document.addEventListener("visibilitychange", onVisible);
-    if (activeTab === "inbox") void pollMessages();
+    void pollMessages();
     const messageInterval = activeTab === "inbox" ? 3000 : 10000;
     const messageTimer = setInterval(pollMessages, messageInterval);
     const templateTimer = setInterval(pollTemplates, 30000);
