@@ -12,6 +12,12 @@ import type {
   TemplateBuilderPayload
 } from "@/types/entities";
 
+import {
+  ensureNotificationAudioReady,
+  isNotificationSoundEnabled,
+  playNotificationSound,
+  setNotificationSoundEnabled
+} from "@/lib/notificationSound";
 import { DashboardShell } from "./dashboard/DashboardShell";
 import { Overview } from "./dashboard/Overview";
 import { Inbox } from "./dashboard/Inbox";
@@ -91,6 +97,7 @@ export function DashboardClient({ user }: DashboardClientProps) {
   const [notifications, setNotifications] = useState<DashboardNotification[]>([]);
   const [lastSeenAt, setLastSeenAt] = useState(0);
   const [inboxFocusPhone, setInboxFocusPhone] = useState("");
+  const [notificationSoundEnabled, setNotificationSoundEnabledState] = useState(true);
   const messageStatusRef = useRef<Map<string, string>>(new Map());
   const notifSeededRef = useRef(false);
   const templateStatusRef = useRef<Map<string, string>>(new Map());
@@ -108,6 +115,7 @@ export function DashboardClient({ user }: DashboardClientProps) {
       const existing = new Set(current.map((item) => item.id));
       const fresh = items.filter((item) => !existing.has(item.id));
       if (!fresh.length) return current;
+      void playNotificationSound();
       for (const item of fresh) {
         if (item.kind === "inbound") toast(item.title, { description: item.description });
         else if (item.kind === "template") toast.success(item.title);
@@ -116,6 +124,15 @@ export function DashboardClient({ user }: DashboardClientProps) {
       }
       return [...fresh, ...current].slice(0, 50);
     });
+  }
+
+  function dismissNotification(id: string) {
+    setNotifications((current) => current.filter((item) => item.id !== id));
+  }
+
+  function updateNotificationSoundEnabled(enabled: boolean) {
+    setNotificationSoundEnabled(enabled);
+    setNotificationSoundEnabledState(enabled);
   }
 
   function markNotificationsRead() {
@@ -336,6 +353,20 @@ export function DashboardClient({ user }: DashboardClientProps) {
         ? window.localStorage.getItem("moonbar:notif-seen")
         : null;
     if (saved) setLastSeenAt(Number(saved) || 0);
+    setNotificationSoundEnabledState(isNotificationSoundEnabled());
+  }, []);
+
+  // Unlock audio after the first user interaction (browser autoplay policy).
+  useEffect(() => {
+    const unlock = () => {
+      void ensureNotificationAudioReady();
+    };
+    window.addEventListener("pointerdown", unlock);
+    window.addEventListener("keydown", unlock);
+    return () => {
+      window.removeEventListener("pointerdown", unlock);
+      window.removeEventListener("keydown", unlock);
+    };
   }, []);
 
   // Background polling so the inbox and notifications update without a manual
@@ -1150,6 +1181,7 @@ export function DashboardClient({ user }: DashboardClientProps) {
       unreadCount={unreadCount}
       onMarkNotificationsRead={markNotificationsRead}
       onNotificationClick={handleNotificationClick}
+      onDismissNotification={dismissNotification}
     >
       {activeTab === "overview" ? (
         <Overview
@@ -1272,7 +1304,13 @@ export function DashboardClient({ user }: DashboardClientProps) {
       ) : null}
 
       {activeTab === "settings" ? (
-        <Settings diagnostics={diagnostics} busy={busy} onLoad={loadDiagnostics} />
+        <Settings
+          diagnostics={diagnostics}
+          busy={busy}
+          onLoad={loadDiagnostics}
+          notificationSoundEnabled={notificationSoundEnabled}
+          onNotificationSoundEnabledChange={updateNotificationSoundEnabled}
+        />
       ) : null}
     </DashboardShell>
   );

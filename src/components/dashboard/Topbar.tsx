@@ -8,7 +8,8 @@ import {
   PanelLeftOpen,
   RefreshCw,
   Search,
-  Settings as SettingsIcon
+  Settings as SettingsIcon,
+  X
 } from "lucide-react";
 import { formatDistanceToNow } from "date-fns";
 
@@ -60,7 +61,8 @@ export function Topbar({
   notifications,
   unreadCount,
   onMarkNotificationsRead,
-  onNotificationClick
+  onNotificationClick,
+  onDismissNotification
 }: {
   user: AdminUser;
   activeTab: TabKey;
@@ -77,6 +79,7 @@ export function Topbar({
   unreadCount: number;
   onMarkNotificationsRead: () => void;
   onNotificationClick: (notification: DashboardNotification) => void;
+  onDismissNotification: (id: string) => void;
 }) {
   const current = tabs.find((tab) => tab.key === activeTab);
   const loading = busy === "loading";
@@ -166,29 +169,49 @@ export function Topbar({
             <div className="max-h-80 overflow-y-auto p-1 moon-scrollbar">
               {notifications.length ? (
                 notifications.slice(0, 15).map((notification) => (
-                  <DropdownMenuItem
+                  <div
                     key={notification.id}
-                    onSelect={() => onNotificationClick(notification)}
-                    className="items-start gap-2.5"
+                    className="group relative rounded-md pr-8 hover:bg-moon-cream/60"
                   >
-                    <span
-                      className="mt-1.5 h-2 w-2 shrink-0 rounded-full"
-                      style={{ backgroundColor: notificationTone[notification.kind] }}
-                    />
-                    <span className="min-w-0 flex-1">
-                      <span className="block truncate text-sm font-medium text-moon-ink">
-                        {notification.title}
-                      </span>
-                      {notification.description ? (
-                        <span className="block truncate text-xs text-muted-foreground">
-                          {notification.description}
+                    <button
+                      type="button"
+                      onClick={() => onNotificationClick(notification)}
+                      className="flex w-full items-start gap-2.5 px-2 py-2.5 text-left"
+                    >
+                      <span
+                        className="mt-1.5 h-2 w-2 shrink-0 rounded-full"
+                        style={{ backgroundColor: notificationTone[notification.kind] }}
+                      />
+                      <span className="min-w-0 flex-1">
+                        <span className="block truncate text-sm font-medium text-moon-ink">
+                          {notification.title}
                         </span>
-                      ) : null}
-                      <span className="mt-0.5 block text-[11px] text-moon-ink/40">
-                        {formatDistanceToNow(new Date(notification.createdAt))} ago
+                        {notification.description ? (
+                          <span className="block truncate text-xs text-muted-foreground">
+                            {notification.description}
+                          </span>
+                        ) : null}
+                        <span className="mt-0.5 block text-[11px] text-moon-ink/40">
+                          {formatDistanceToNow(new Date(notification.createdAt))} ago
+                        </span>
                       </span>
-                    </span>
-                  </DropdownMenuItem>
+                    </button>
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="icon"
+                      className="absolute right-0.5 top-1.5 h-6 w-6 text-moon-ink/40 opacity-70 hover:text-moon-ink group-hover:opacity-100"
+                      aria-label="Dismiss notification"
+                      title="Dismiss"
+                      onClick={(event) => {
+                        event.preventDefault();
+                        event.stopPropagation();
+                        onDismissNotification(notification.id);
+                      }}
+                    >
+                      <X className="h-3.5 w-3.5" />
+                    </Button>
+                  </div>
                 ))
               ) : (
                 <div className="grid place-items-center gap-1 px-3 py-8 text-center text-sm text-muted-foreground">

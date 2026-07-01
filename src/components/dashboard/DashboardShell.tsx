@@ -22,6 +22,7 @@ export function DashboardShell({
   unreadCount,
   onMarkNotificationsRead,
   onNotificationClick,
+  onDismissNotification,
   children
 }: {
   user: AdminUser;
@@ -36,6 +37,7 @@ export function DashboardShell({
   unreadCount: number;
   onMarkNotificationsRead: () => void;
   onNotificationClick: (notification: DashboardNotification) => void;
+  onDismissNotification: (id: string) => void;
   children: React.ReactNode;
 }) {
   const [collapsed, setCollapsed] = React.useState(false);
@@ -105,6 +107,7 @@ export function DashboardShell({
           unreadCount={unreadCount}
           onMarkNotificationsRead={onMarkNotificationsRead}
           onNotificationClick={onNotificationClick}
+          onDismissNotification={onDismissNotification}
         />
 
         <main className="flex-1 px-4 py-6 lg:px-6">
