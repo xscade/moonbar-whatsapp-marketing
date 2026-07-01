@@ -646,16 +646,6 @@ export function Inbox({
                   {sending ? <Loader2 className="animate-spin" /> : <Send />}
                 </Button>
               </form>
-
-              <InboxTemplateDialog
-                open={templateOpen}
-                onOpenChange={setTemplateOpen}
-                templates={templates}
-                phone={activeConversation.phone}
-                contactName={activeConversation.name}
-                sending={sending}
-                onSend={onSendTemplate}
-              />
             </>
           ) : (
             <div className="grid flex-1 place-items-center p-8 text-center text-sm text-muted-foreground">
@@ -819,6 +809,18 @@ export function Inbox({
           {chatUi}
         </Section>
       )}
+
+      {activeConversation ? (
+        <InboxTemplateDialog
+          open={templateOpen}
+          onOpenChange={setTemplateOpen}
+          templates={templates}
+          phone={activeConversation.phone}
+          contactName={activeConversation.name}
+          sending={sending}
+          onSend={onSendTemplate}
+        />
+      ) : null}
     </motion.div>
   );
 }

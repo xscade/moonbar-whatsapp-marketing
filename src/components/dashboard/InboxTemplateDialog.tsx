@@ -165,7 +165,7 @@ export function InboxTemplateDialog({
                   <SelectTrigger>
                     <SelectValue placeholder="Choose a template" />
                   </SelectTrigger>
-                  <SelectContent>
+                  <SelectContent className="z-[120]">
                     {approved.map((template) => (
                       <SelectItem
                         key={`${template.name}-${template.language}`}
