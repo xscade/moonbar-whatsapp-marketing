@@ -2,7 +2,8 @@ import { z } from "zod";
 import { ObjectId } from "mongodb";
 import { error, handleRouteError, json, requireUser } from "@/lib/api";
 import { getDb } from "@/lib/mongodb";
-import { sendTemplate } from "@/lib/whatsapp";
+import { graphGet, sendTemplate } from "@/lib/whatsapp";
+import { extractTemplate, type MetaTemplate } from "@/lib/whatsapp/templates";
 
 export const maxDuration = 60;
 
@@ -66,6 +67,87 @@ function resolveParametersForRecipient({
   return resolved;
 }
 
+function templateNeedsRefresh(template: Record<string, unknown> | null) {
+  if (!template) return true;
+  const parameters = Array.isArray(template.parameters) ? template.parameters : [];
+  return !template.body && !template.headerFormat && !parameters.length;
+}
+
+function addDefaultContactFieldMappings({
+  parameterOrder,
+  parameters,
+  contactFieldMappings
+}: {
+  parameterOrder: string[];
+  parameters: Record<string, string>;
+  contactFieldMappings: Record<string, ContactField>;
+}) {
+  const nextMappings = { ...contactFieldMappings };
+  if (
+    parameterOrder.includes("name") &&
+    !nextMappings.name &&
+    !parameters.name?.trim()
+  ) {
+    nextMappings.name = "name";
+  }
+  return nextMappings;
+}
+
+async function refreshTemplateFromMeta({
+  templateName,
+  language
+}: {
+  templateName: string;
+  language: string;
+}) {
+  const wabaId = process.env.WHATSAPP_BUSINESS_ACCOUNT_ID;
+  if (!wabaId) return null;
+
+  const response = await graphGet(`${wabaId}/message_templates`, {
+    fields: "id,name,language,category,status,parameter_format,components",
+    name: templateName
+  });
+
+  if (!response.ok) return null;
+
+  const metaTemplate = ((response.body.data as MetaTemplate[]) ?? []).find(
+    (template) => template.name === templateName && template.language === language
+  );
+  return metaTemplate ? extractTemplate(metaTemplate) : null;
+}
+
+async function getTemplateDetails({
+  db,
+  templateName,
+  language
+}: {
+  db: Awaited<ReturnType<typeof getDb>>;
+  templateName: string;
+  language: string;
+}) {
+  const template = await db.collection("message_templates").findOne({
+    name: templateName,
+    language
+  });
+
+  if (!templateNeedsRefresh(template)) return template;
+
+  const latestTemplate = await refreshTemplateFromMeta({ templateName, language });
+  if (!latestTemplate) return template;
+
+  const now = new Date();
+  await db.collection("message_templates").updateOne(
+    { name: latestTemplate.name, language: latestTemplate.language },
+    {
+      $set: { ...latestTemplate, updatedAt: now },
+      $setOnInsert: { createdAt: now }
+    },
+    { upsert: true }
+  );
+
+  return latestTemplate;
+}
+
 async function createCampaign({
   userId,
   data
@@ -104,8 +186,9 @@ async function createCampaign({
 
   if (!contacts.length) throw new Error("No subscribed recipients selected");
 
-  const template = await db.collection("message_templates").findOne({
-    name: data.templateName,
+  const template = await getTemplateDetails({
+    db,
+    templateName: data.templateName,
     language: data.language
   });
 
@@ -113,14 +196,27 @@ async function createCampaign({
     throw new Error("Upload a header image before sending this template");
   }
 
+  const parameterOrder = data.parameterOrder.length
+    ? data.parameterOrder
+    : Array.isArray(template?.parameters)
+      ? template.parameters
+          .map((parameter: { name?: string }) => parameter.name)
+          .filter((name): name is string => Boolean(name))
+      : [];
+  const contactFieldMappings = addDefaultContactFieldMappings({
+    parameterOrder,
+    parameters: data.parameters,
+    contactFieldMappings: data.contactFieldMappings
+  });
+
   const now = new Date();
   const result = await db.collection("campaigns").insertOne({
     name: data.name,
     templateName: data.templateName,
     language: data.language,
     parameters: data.parameters,
-    parameterOrder: data.parameterOrder,
-    contactFieldMappings: data.contactFieldMappings,
+    parameterOrder,
+    contactFieldMappings,
     headerImageId: data.headerImageId,
     listIds: data.listIds,
     recipients: contacts.map((contact) => ({
@@ -193,7 +289,7 @@ async function processCampaignBatch({
   const parameters = Object.keys(data.parameters || {}).length
     ? data.parameters
     : campaign.parameters;
-  const contactFieldMappings = Object.keys(data.contactFieldMappings || {}).length
+  let contactFieldMappings = Object.keys(data.contactFieldMappings || {}).length
     ? data.contactFieldMappings
     : campaign.contactFieldMappings || {};
   let parameterOrder = data.parameterOrder?.length
@@ -212,16 +308,19 @@ async function processCampaignBatch({
     headerImageId = priorMessage?.payload?.headerImageId;
   }
 
-  const template = await db.collection("message_templates").findOne({
-    name: templateName,
-    language
-  });
+  const template = await getTemplateDetails({ db, templateName, language });
 
   if (!parameterOrder.length && Array.isArray(template?.parameters)) {
     parameterOrder = template.parameters
       .map((parameter: { name?: string }) => parameter.name)
-      .filter(Boolean);
+      .filter((name): name is string => Boolean(name));
   }
+
+  contactFieldMappings = addDefaultContactFieldMappings({
+    parameterOrder,
+    parameters,
+    contactFieldMappings
+  });
 
   if (template?.headerFormat === "IMAGE" && !headerImageId) {
     throw new Error(
