@@ -28,7 +28,7 @@ export const tabs: Array<{
   icon: typeof LayoutDashboard;
 }> = [
   { key: "overview", label: "Overview", description: "Delivery at a glance", icon: LayoutDashboard },
-  { key: "inbox", label: "Inbox", description: "Conversations & webhook events", icon: Inbox },
+  { key: "inbox", label: "Inbox", description: "WhatsApp-style customer chat", icon: Inbox },
   { key: "campaigns", label: "Campaigns", description: "Build and send a broadcast", icon: Megaphone },
   { key: "contacts", label: "Contacts", description: "Your subscriber base", icon: ContactRound },
   { key: "lists", label: "Lists", description: "Audience segments", icon: ClipboardList },

@@ -1,202 +1,634 @@
 "use client";
 
+import { type FormEvent, useEffect, useMemo, useState } from "react";
 import { motion } from "motion/react";
 import { formatDistanceToNow } from "date-fns";
-import { Inbox as InboxIcon, RefreshCw } from "lucide-react";
+import {
+  AlertCircle,
+  Check,
+  CheckCheck,
+  Clock3,
+  Code2,
+  Inbox as InboxIcon,
+  Loader2,
+  MessageSquareText,
+  RefreshCw,
+  Search,
+  Send,
+  X
+} from "lucide-react";
 
+import type { Contact } from "@/types/entities";
+import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Textarea } from "@/components/ui/textarea";
 import { staggerContainer } from "@/lib/motion";
 import { cn } from "@/lib/utils";
 import { Section } from "./Section";
 import type { WebhookEvent, WhatsAppMessage, WhatsAppStatus } from "./types";
 
-const statusTone: Record<string, string> = {
+type BadgeVariant = "success" | "secondary" | "muted" | "destructive";
+
+type ChatConversation = {
+  phone: string;
+  name: string;
+  messages: WhatsAppMessage[];
+  latest?: WhatsAppMessage;
+  contact?: Contact;
+};
+
+const statusTone: Record<string, BadgeVariant> = {
   read: "success",
   delivered: "secondary",
   sent: "muted",
+  accepted: "muted",
   failed: "destructive"
 };
 
+function phoneKey(phone?: string) {
+  return (phone || "").replace(/[^\d]/g, "");
+}
+
+function getInitials(name: string) {
+  const parts = name
+    .replace(/[^\w\s]/g, "")
+    .split(/\s+/)
+    .filter(Boolean);
+  if (!parts.length) return "?";
+  return parts
+    .slice(0, 2)
+    .map((part) => part[0])
+    .join("")
+    .toUpperCase();
+}
+
+function messageText(message?: WhatsAppMessage) {
+  if (!message) return "Start a conversation";
+  return message.text || message.templateName || message.messageId || "WhatsApp message";
+}
+
+function timeAgo(value?: string) {
+  if (!value) return "";
+  return `${formatDistanceToNow(new Date(value))} ago`;
+}
+
+function shortTime(value?: string) {
+  if (!value) return "";
+  return new Date(value).toLocaleTimeString([], {
+    hour: "2-digit",
+    minute: "2-digit"
+  });
+}
+
+function formatError(errors?: unknown[]) {
+  const first = errors?.[0];
+  if (!first) return "";
+  if (typeof first === "string") return first;
+  if (
+    typeof first === "object" &&
+    first &&
+    "message" in first &&
+    typeof first.message === "string"
+  ) {
+    return first.message;
+  }
+  if (
+    typeof first === "object" &&
+    first &&
+    "error" in first &&
+    first.error &&
+    typeof first.error === "object" &&
+    "message" in first.error
+  ) {
+    return String(first.error.message);
+  }
+  return JSON.stringify(first).slice(0, 180);
+}
+
+function StatusGlyph({
+  status,
+  className
+}: {
+  status?: string;
+  className?: string;
+}) {
+  const normalized = (status || "").toLowerCase();
+
+  if (normalized === "failed") {
+    return (
+      <AlertCircle
+        className={cn("h-3.5 w-3.5 text-moon-red", className)}
+        aria-label="failed"
+      />
+    );
+  }
+  if (normalized === "read") {
+    return (
+      <CheckCheck
+        className={cn("h-4 w-4 text-[#34B7F1]", className)}
+        aria-label="read"
+      />
+    );
+  }
+  if (normalized === "delivered") {
+    return (
+      <CheckCheck
+        className={cn("h-4 w-4 text-moon-green/65", className)}
+        aria-label="delivered"
+      />
+    );
+  }
+  if (normalized === "sent" || normalized === "accepted") {
+    return (
+      <Check
+        className={cn("h-4 w-4 text-moon-green/65", className)}
+        aria-label="sent"
+      />
+    );
+  }
+  return (
+    <Clock3
+      className={cn("h-3.5 w-3.5 text-muted-foreground", className)}
+      aria-label="pending"
+    />
+  );
+}
+
+function MessageBubble({ message }: { message: WhatsAppMessage }) {
+  const inbound = message.direction === "inbound";
+  const failed = message.lastStatus === "failed";
+  const error = formatError(message.errors);
+
+  return (
+    <div
+      className={cn(
+        "flex w-full",
+        inbound ? "justify-start" : "justify-end"
+      )}
+    >
+      <div
+        className={cn(
+          "max-w-[78%] rounded-lg px-3 py-2 shadow-sm",
+          inbound
+            ? "rounded-tl-sm bg-white text-moon-ink"
+            : failed
+              ? "rounded-tr-sm bg-moon-red/10 text-moon-ink"
+              : "rounded-tr-sm bg-[#D9FDD3] text-moon-ink"
+        )}
+      >
+        {message.type === "template" && message.templateName ? (
+          <Badge variant="secondary" className="mb-1 max-w-full truncate">
+            {message.templateName}
+          </Badge>
+        ) : null}
+        <p className="whitespace-pre-wrap break-words text-sm leading-6">
+          {messageText(message)}
+        </p>
+        {error ? (
+          <p className="mt-1 break-words text-xs leading-5 text-moon-red">
+            {error}
+          </p>
+        ) : null}
+        <div className="mt-1 flex items-center justify-end gap-1 text-[11px] text-muted-foreground">
+          <span>{shortTime(message.createdAt)}</span>
+          {!inbound ? <StatusGlyph status={message.lastStatus} /> : null}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export function Inbox({
+  contacts,
   messages,
   statuses,
   events,
   busy,
+  onSendMessage,
   onRefresh
 }: {
+  contacts: Contact[];
   messages: WhatsAppMessage[];
   statuses: WhatsAppStatus[];
   events: WebhookEvent[];
   busy: string;
+  onSendMessage: (input: {
+    to: string;
+    text: string;
+    contactName?: string;
+  }) => Promise<boolean>;
   onRefresh: () => void;
 }) {
+  const [search, setSearch] = useState("");
+  const [activePhone, setActivePhone] = useState("");
+  const [draft, setDraft] = useState("");
+  const [developerOpen, setDeveloperOpen] = useState(false);
+
+  const conversations = useMemo(() => {
+    const contactByPhone = new Map<string, Contact>();
+    const map = new Map<string, ChatConversation>();
+
+    for (const contact of contacts) {
+      const key = phoneKey(contact.phone);
+      if (!key) continue;
+      contactByPhone.set(key, contact);
+      map.set(key, {
+        phone: key,
+        name: contact.name || `+${key}`,
+        contact,
+        messages: []
+      });
+    }
+
+    function ensureConversation(phone?: string, name?: string) {
+      const key = phoneKey(phone);
+      if (!key) return null;
+      const contact = contactByPhone.get(key);
+      const existing = map.get(key);
+      if (existing) {
+        if (contact) existing.contact = contact;
+        if (!existing.name || existing.name === `+${key}`) {
+          existing.name = contact?.name || name || `+${key}`;
+        }
+        return existing;
+      }
+      const conversation: ChatConversation = {
+        phone: key,
+        name: contact?.name || name || `+${key}`,
+        contact,
+        messages: []
+      };
+      map.set(key, conversation);
+      return conversation;
+    }
+
+    for (const message of messages) {
+      const phone =
+        message.direction === "inbound" ? message.from : message.to;
+      const conversation = ensureConversation(phone, message.contactName);
+      if (conversation) conversation.messages.push(message);
+    }
+
+    return Array.from(map.values())
+      .map((conversation) => {
+        const sortedMessages = [...conversation.messages].sort(
+          (a, b) =>
+            new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime()
+        );
+        return {
+          ...conversation,
+          messages: sortedMessages,
+          latest: sortedMessages.at(-1)
+        };
+      })
+      .sort((a, b) => {
+        const aTime = a.latest ? new Date(a.latest.createdAt).getTime() : 0;
+        const bTime = b.latest ? new Date(b.latest.createdAt).getTime() : 0;
+        if (aTime !== bTime) return bTime - aTime;
+        return a.name.localeCompare(b.name);
+      });
+  }, [contacts, messages]);
+
+  const visibleConversations = useMemo(() => {
+    const term = search.toLowerCase().trim();
+    return conversations
+      .filter((conversation) => {
+        if (!term) return true;
+        return [
+          conversation.name,
+          conversation.phone,
+          conversation.contact?.source,
+          conversation.contact?.tags.join(" "),
+          messageText(conversation.latest)
+        ]
+          .join(" ")
+          .toLowerCase()
+          .includes(term);
+      })
+      .slice(0, 150);
+  }, [conversations, search]);
+
+  useEffect(() => {
+    if (!conversations.length) {
+      if (activePhone) setActivePhone("");
+      return;
+    }
+    if (!activePhone || !conversations.some((item) => item.phone === activePhone)) {
+      setActivePhone(conversations[0].phone);
+    }
+  }, [activePhone, conversations]);
+
+  const activeConversation =
+    conversations.find((conversation) => conversation.phone === activePhone) ||
+    visibleConversations[0] ||
+    conversations[0];
+  const sending = activeConversation
+    ? busy === `chat-send-${activeConversation.phone}`
+    : false;
+
+  async function handleSend(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const text = draft.trim();
+    if (!activeConversation || !text || sending) return;
+
+    const sent = await onSendMessage({
+      to: activeConversation.phone,
+      text,
+      contactName: activeConversation.name
+    });
+    if (sent) setDraft("");
+  }
+
   return (
     <motion.div
       variants={staggerContainer}
       initial="hidden"
       animate="show"
-      className="grid gap-6 xl:grid-cols-[1.2fr_0.8fr]"
     >
       <Section
-        title="Conversation feed"
-        description="Inbound and outbound WhatsApp messages"
-        action={
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={onRefresh}
-            disabled={busy === "messages"}
-          >
-            <RefreshCw className={busy === "messages" ? "animate-spin" : ""} />
-            Refresh
-          </Button>
-        }
+        title="WhatsApp Inbox"
+        description="Live customer conversations"
       >
-        <div className="rounded-xl border border-moon-green/12">
-          <ScrollArea className="h-[620px]">
-            {messages.map((message) => {
-              const inbound = message.direction === "inbound";
-              return (
-                <div
-                  key={message._id}
-                  className="border-b border-moon-green/8 p-4 last:border-0"
-                >
-                  <div className="flex flex-wrap items-start justify-between gap-3">
-                    <div>
-                      <p className="font-semibold text-moon-ink">
-                        {message.contactName ||
-                          (inbound ? `+${message.from}` : `+${message.to}`)}
-                      </p>
-                      <p className="mt-0.5 text-xs uppercase tracking-wide text-muted-foreground">
-                        {inbound ? "Inbound" : "Outbound"} · {message.type || "message"}
-                      </p>
+        <div className="relative overflow-hidden rounded-xl border border-moon-green/12 bg-[#F4EEE3] shadow-sm">
+          <div className="grid min-h-[720px] lg:grid-cols-[360px_minmax(0,1fr)]">
+            <aside className="border-b border-moon-green/12 bg-[#F7F3EA] lg:border-b-0 lg:border-r">
+              <div className="border-b border-moon-green/10 p-4">
+                <div className="flex items-center justify-between gap-3">
+                  <div>
+                    <h3 className="font-semibold text-moon-ink">Chats</h3>
+                    <p className="text-sm text-muted-foreground">
+                      {conversations.length.toLocaleString()} conversations
+                    </p>
+                  </div>
+                  <Button
+                    variant="outline"
+                    size="icon"
+                    onClick={onRefresh}
+                    disabled={busy === "messages"}
+                    title="Refresh"
+                  >
+                    <RefreshCw
+                      className={busy === "messages" ? "animate-spin" : ""}
+                    />
+                  </Button>
+                </div>
+                <div className="relative mt-4">
+                  <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-moon-ink/40" />
+                  <Input
+                    value={search}
+                    onChange={(event) => setSearch(event.target.value)}
+                    placeholder="Search chats or contacts"
+                    className="h-11 rounded-full bg-white pl-9"
+                  />
+                </div>
+              </div>
+
+              <ScrollArea className="h-[610px]">
+                {visibleConversations.map((conversation) => {
+                  const active = conversation.phone === activeConversation?.phone;
+                  const latest = conversation.latest;
+                  return (
+                    <button
+                      key={conversation.phone}
+                      type="button"
+                      onClick={() => setActivePhone(conversation.phone)}
+                      className={cn(
+                        "flex w-full items-center gap-3 border-b border-moon-green/8 px-4 py-3 text-left transition-colors hover:bg-white/70",
+                        active ? "bg-white" : "bg-transparent"
+                      )}
+                    >
+                      <Avatar className="h-11 w-11">
+                        <AvatarFallback>
+                          {getInitials(conversation.name)}
+                        </AvatarFallback>
+                      </Avatar>
+                      <span className="min-w-0 flex-1">
+                        <span className="flex items-center justify-between gap-2">
+                          <span className="truncate font-semibold text-moon-ink">
+                            {conversation.name}
+                          </span>
+                          <span className="shrink-0 text-xs text-muted-foreground">
+                            {latest ? timeAgo(latest.createdAt) : ""}
+                          </span>
+                        </span>
+                        <span className="mt-1 flex items-center gap-1 text-sm text-muted-foreground">
+                          {latest?.direction === "outbound" ? (
+                            <StatusGlyph
+                              status={latest.lastStatus}
+                              className="shrink-0"
+                            />
+                          ) : null}
+                          <span className="truncate">{messageText(latest)}</span>
+                        </span>
+                      </span>
+                    </button>
+                  );
+                })}
+                {!visibleConversations.length ? (
+                  <div className="grid place-items-center p-10 text-center text-sm text-muted-foreground">
+                    <InboxIcon className="mb-3 h-7 w-7 text-moon-green/40" />
+                    No chats found
+                  </div>
+                ) : null}
+              </ScrollArea>
+            </aside>
+
+            <section className="flex min-h-[720px] min-w-0 flex-col bg-[#EFE7DA]">
+              {activeConversation ? (
+                <>
+                  <div className="flex items-center justify-between gap-3 border-b border-moon-green/12 bg-[#F7F3EA] px-4 py-3">
+                    <div className="flex min-w-0 items-center gap-3">
+                      <Avatar className="h-10 w-10">
+                        <AvatarFallback>
+                          {getInitials(activeConversation.name)}
+                        </AvatarFallback>
+                      </Avatar>
+                      <div className="min-w-0">
+                        <h3 className="truncate font-semibold text-moon-ink">
+                          {activeConversation.name}
+                        </h3>
+                        <p className="truncate text-sm text-muted-foreground">
+                          +{activeConversation.phone}
+                        </p>
+                      </div>
                     </div>
                     <div className="flex items-center gap-2">
-                      {message.lastStatus ? (
-                        <Badge
-                          variant={
-                            (statusTone[message.lastStatus] as
-                              | "success"
-                              | "secondary"
-                              | "muted"
-                              | "destructive") || "muted"
-                          }
-                        >
-                          {message.lastStatus}
-                        </Badge>
-                      ) : null}
-                      <span className="text-xs text-muted-foreground">
-                        {formatDistanceToNow(new Date(message.createdAt))} ago
-                      </span>
-                    </div>
-                  </div>
-                  <p
-                    className={cn(
-                      "mt-3 inline-block max-w-full rounded-2xl px-3.5 py-2 text-sm leading-6",
-                      inbound
-                        ? "bg-moon-yellow/50 text-moon-ink"
-                        : "bg-moon-green text-moon-paper"
-                    )}
-                  >
-                    {message.text || message.templateName || message.messageId}
-                  </p>
-                  {message.errors?.length ? (
-                    <p className="mt-2 text-xs text-moon-red">
-                      {JSON.stringify(message.errors)}
-                    </p>
-                  ) : null}
-                </div>
-              );
-            })}
-            {!messages.length ? (
-              <div className="grid place-items-center p-12 text-center text-sm text-muted-foreground">
-                <InboxIcon className="mb-3 h-7 w-7 text-moon-green/40" />
-                Webhook messages appear here after Meta sends events.
-              </div>
-            ) : null}
-          </ScrollArea>
-        </div>
-      </Section>
-
-      <Section title="Events" description="Delivery receipts & raw webhooks">
-        <Tabs defaultValue="delivery">
-          <TabsList className="w-full">
-            <TabsTrigger value="delivery" className="flex-1">
-              Delivery ({statuses.length})
-            </TabsTrigger>
-            <TabsTrigger value="webhooks" className="flex-1">
-              Webhooks ({events.length})
-            </TabsTrigger>
-          </TabsList>
-
-          <TabsContent value="delivery">
-            <div className="rounded-xl border border-moon-green/12">
-              <ScrollArea className="h-[520px]">
-                {statuses.map((status) => (
-                  <div
-                    key={status._id}
-                    className="flex items-center justify-between gap-3 border-b border-moon-green/8 px-3 py-3 text-sm last:border-0"
-                  >
-                    <div className="min-w-0">
-                      <Badge
-                        variant={
-                          (statusTone[status.status] as
-                            | "success"
-                            | "secondary"
-                            | "muted"
-                            | "destructive") || "muted"
-                        }
-                        className="capitalize"
-                      >
-                        {status.status}
+                      <Badge variant="muted">
+                        {activeConversation.messages.length} messages
                       </Badge>
-                      <p className="mt-1 truncate text-xs text-muted-foreground">
-                        {status.messageId}
-                      </p>
+                      <Button
+                        variant="outline"
+                        size="icon"
+                        onClick={() => setDeveloperOpen(true)}
+                        title="Developer events"
+                      >
+                        <Code2 />
+                      </Button>
                     </div>
-                    <span className="shrink-0 text-xs text-muted-foreground">
-                      {formatDistanceToNow(new Date(status.createdAt))} ago
-                    </span>
                   </div>
-                ))}
-                {!statuses.length ? (
-                  <p className="p-4 text-sm text-muted-foreground">
-                    No delivery events yet
-                  </p>
-                ) : null}
-              </ScrollArea>
-            </div>
-          </TabsContent>
 
-          <TabsContent value="webhooks">
-            <div className="rounded-xl bg-moon-ink p-3">
-              <ScrollArea className="h-[500px]">
-                {events.map((event) => (
-                  <details
-                    key={event._id}
-                    className="border-b border-white/10 py-2 last:border-0"
+                  <ScrollArea className="flex-1">
+                    <div className="min-h-[552px] space-y-3 bg-[radial-gradient(circle_at_1px_1px,rgba(65,76,47,0.10)_1px,transparent_0)] bg-[length:22px_22px] p-5">
+                      {activeConversation.messages.map((message) => (
+                        <MessageBubble key={message._id} message={message} />
+                      ))}
+                      {!activeConversation.messages.length ? (
+                        <div className="grid min-h-[480px] place-items-center text-center text-sm text-muted-foreground">
+                          <div>
+                            <MessageSquareText className="mx-auto mb-3 h-8 w-8 text-moon-green/45" />
+                            No messages with this contact yet
+                          </div>
+                        </div>
+                      ) : null}
+                    </div>
+                  </ScrollArea>
+
+                  <form
+                    onSubmit={handleSend}
+                    className="flex items-end gap-3 border-t border-moon-green/12 bg-[#F7F3EA] p-3"
                   >
-                    <summary className="cursor-pointer text-xs font-medium text-moon-cream">
-                      {event.object || "event"} ·{" "}
-                      {formatDistanceToNow(new Date(event.createdAt))} ago
-                    </summary>
-                    <pre className="mt-2 whitespace-pre-wrap text-[11px] leading-5 text-moon-cream/70">
-                      {JSON.stringify(event.payload, null, 2)}
-                    </pre>
-                  </details>
-                ))}
-                {!events.length ? (
-                  <p className="p-2 text-sm text-moon-cream/70">
-                    No webhook calls stored yet
-                  </p>
-                ) : null}
-              </ScrollArea>
+                    <Textarea
+                      value={draft}
+                      onChange={(event) => setDraft(event.target.value)}
+                      onKeyDown={(event) => {
+                        if (event.key === "Enter" && !event.shiftKey) {
+                          event.preventDefault();
+                          event.currentTarget.form?.requestSubmit();
+                        }
+                      }}
+                      placeholder="Message"
+                      className="min-h-11 resize-none rounded-2xl bg-white"
+                      disabled={sending}
+                    />
+                    <Button
+                      type="submit"
+                      size="icon"
+                      className="h-11 w-11 rounded-full"
+                      disabled={!draft.trim() || sending}
+                      title="Send message"
+                    >
+                      {sending ? <Loader2 className="animate-spin" /> : <Send />}
+                    </Button>
+                  </form>
+                </>
+              ) : (
+                <div className="grid flex-1 place-items-center p-8 text-center text-sm text-muted-foreground">
+                  <div>
+                    <InboxIcon className="mx-auto mb-3 h-8 w-8 text-moon-green/45" />
+                    Select a contact to chat
+                  </div>
+                </div>
+              )}
+            </section>
+          </div>
+
+          <div
+            className={cn(
+              "absolute inset-y-0 right-0 z-20 w-full max-w-[480px] border-l border-moon-green/12 bg-[#F7F3EA] shadow-2xl transition-transform duration-300",
+              developerOpen ? "translate-x-0" : "translate-x-full"
+            )}
+          >
+            <div className="flex items-center justify-between border-b border-moon-green/10 p-4">
+              <div>
+                <h3 className="font-semibold text-moon-ink">Developer events</h3>
+                <p className="text-sm text-muted-foreground">
+                  Delivery receipts and webhook payloads
+                </p>
+              </div>
+              <Button
+                variant="ghost"
+                size="icon"
+                onClick={() => setDeveloperOpen(false)}
+                title="Close"
+              >
+                <X />
+              </Button>
             </div>
-          </TabsContent>
-        </Tabs>
+
+            <Tabs defaultValue="delivery" className="p-4">
+              <TabsList className="w-full">
+                <TabsTrigger value="delivery" className="flex-1">
+                  Delivery ({statuses.length})
+                </TabsTrigger>
+                <TabsTrigger value="webhooks" className="flex-1">
+                  Webhooks ({events.length})
+                </TabsTrigger>
+              </TabsList>
+
+              <TabsContent value="delivery">
+                <div className="mt-3 overflow-hidden rounded-lg border border-moon-green/12 bg-white">
+                  <ScrollArea className="h-[600px]">
+                    {statuses.map((status) => (
+                      <div
+                        key={status._id}
+                        className="flex items-center justify-between gap-3 border-b border-moon-green/8 px-3 py-3 text-sm last:border-0"
+                      >
+                        <div className="min-w-0">
+                          <Badge
+                            variant={statusTone[status.status] || "muted"}
+                            className="capitalize"
+                          >
+                            <StatusGlyph status={status.status} />
+                            {status.status}
+                          </Badge>
+                          <p className="mt-1 truncate text-xs text-muted-foreground">
+                            {status.messageId}
+                          </p>
+                        </div>
+                        <span className="shrink-0 text-xs text-muted-foreground">
+                          {timeAgo(status.createdAt)}
+                        </span>
+                      </div>
+                    ))}
+                    {!statuses.length ? (
+                      <p className="p-4 text-sm text-muted-foreground">
+                        No delivery events yet
+                      </p>
+                    ) : null}
+                  </ScrollArea>
+                </div>
+              </TabsContent>
+
+              <TabsContent value="webhooks">
+                <div className="mt-3 rounded-lg bg-moon-ink p-3">
+                  <ScrollArea className="h-[600px]">
+                    {events.map((event) => (
+                      <details
+                        key={event._id}
+                        className="border-b border-white/10 py-2 last:border-0"
+                      >
+                        <summary className="cursor-pointer text-xs font-medium text-moon-cream">
+                          {event.object || "event"} · {timeAgo(event.createdAt)}
+                        </summary>
+                        <pre className="mt-2 whitespace-pre-wrap break-words text-[11px] leading-5 text-moon-cream/70">
+                          {JSON.stringify(event.payload, null, 2)}
+                        </pre>
+                      </details>
+                    ))}
+                    {!events.length ? (
+                      <p className="p-2 text-sm text-moon-cream/70">
+                        No webhook calls stored yet
+                      </p>
+                    ) : null}
+                  </ScrollArea>
+                </div>
+              </TabsContent>
+            </Tabs>
+          </div>
+
+          {developerOpen ? (
+            <button
+              type="button"
+              aria-label="Close developer events"
+              className="absolute inset-0 z-10 bg-moon-ink/20 lg:hidden"
+              onClick={() => setDeveloperOpen(false)}
+            />
+          ) : null}
+        </div>
       </Section>
     </motion.div>
   );

@@ -174,6 +174,39 @@ export function DashboardClient({ user }: DashboardClientProps) {
     setWebhookEvents(messageRes.events);
   }
 
+  async function sendInboxMessage({
+    to,
+    text,
+    contactName
+  }: {
+    to: string;
+    text: string;
+    contactName?: string;
+  }) {
+    setBusy(`chat-send-${to}`);
+    try {
+      const result = await api<{
+        ok: boolean;
+        error?: string;
+        message?: WhatsAppMessage;
+      }>("/api/messages/send", {
+        method: "POST",
+        body: JSON.stringify({ to, text, contactName })
+      });
+      await refreshMessages();
+      if (!result.ok) {
+        setNotice(result.error || "Message could not be sent");
+        return false;
+      }
+      return true;
+    } catch (err) {
+      setNotice(err instanceof Error ? err.message : "Message could not be sent");
+      return false;
+    } finally {
+      setBusy("");
+    }
+  }
+
   async function fetchListContacts(listId: string) {
     const result = await api<{ data: Contact[] }>(
       `/api/contacts?listId=${encodeURIComponent(listId)}&limit=20000`
@@ -673,6 +706,128 @@ export function DashboardClient({ user }: DashboardClientProps) {
     }
   }
 
+  async function updateContact(contact: Contact, formData: FormData) {
+    const payload = {
+      name: String(formData.get("name") || ""),
+      phone: String(formData.get("phone") || ""),
+      source: String(formData.get("source") || ""),
+      tags: csvToArray(String(formData.get("tags") || "")),
+      listIds: formData.getAll("listIds").map(String),
+      notes: String(formData.get("notes") || ""),
+      consentStatus: String(formData.get("consentStatus") || "subscribed")
+    };
+
+    setBusy(`edit-${contact._id}`);
+    try {
+      await api(`/api/contacts/${contact._id}`, {
+        method: "PATCH",
+        body: JSON.stringify(payload)
+      });
+      await refreshAll();
+      if (selectedListId) await fetchListContacts(selectedListId);
+      setNotice("Contact updated");
+      return true;
+    } catch (err) {
+      setNotice(err instanceof Error ? err.message : "Could not update contact");
+      return false;
+    } finally {
+      setBusy("");
+    }
+  }
+
+  async function importContacts(file: File, listId: string) {
+    setBusy("import-contacts");
+    try {
+      const formData = new FormData();
+      formData.set("file", file);
+      if (listId) formData.set("listId", listId);
+      const response = await fetch("/api/contacts/import", {
+        method: "POST",
+        body: formData
+      });
+      const body = await response.json();
+      if (!response.ok) {
+        throw new Error(body.error?.message || body.error || "Import failed");
+      }
+      await refreshAll();
+      if (selectedListId) await fetchListContacts(selectedListId);
+      setNotice(
+        `Imported ${body.created || 0} new, updated ${body.updated || 0}, skipped ${body.skipped || 0}`
+      );
+    } catch (err) {
+      setNotice(err instanceof Error ? err.message : "Could not import contacts");
+    } finally {
+      setBusy("");
+    }
+  }
+
+  async function updateList(list: ContactList, formData: FormData) {
+    const payload = {
+      name: String(formData.get("name") || ""),
+      description: String(formData.get("description") || ""),
+      color: String(formData.get("color") || list.color)
+    };
+
+    setBusy(`edit-list-${list._id}`);
+    try {
+      await api(`/api/lists/${list._id}`, {
+        method: "PATCH",
+        body: JSON.stringify(payload)
+      });
+      await refreshAll();
+      await fetchListContacts(list._id);
+      setNotice("List updated");
+    } catch (err) {
+      setNotice(err instanceof Error ? err.message : "Could not update list");
+    } finally {
+      setBusy("");
+    }
+  }
+
+  async function addContactsToList(listId: string, contactIds: string[]) {
+    if (!contactIds.length) return;
+    setBusy(`add-list-contacts-${listId}`);
+    try {
+      const updates = contactIds.map((contactId) => {
+        const contact = contacts.find((item) => item._id === contactId);
+        if (!contact) return Promise.resolve();
+        return api(`/api/contacts/${contactId}`, {
+          method: "PATCH",
+          body: JSON.stringify({
+            listIds: Array.from(new Set([...(contact.listIds || []), listId]))
+          })
+        });
+      });
+      await Promise.all(updates);
+      await refreshAll();
+      await fetchListContacts(listId);
+      setNotice(`${contactIds.length} contact${contactIds.length === 1 ? "" : "s"} added`);
+    } catch (err) {
+      setNotice(err instanceof Error ? err.message : "Could not add contacts");
+    } finally {
+      setBusy("");
+    }
+  }
+
+  async function removeContactFromList(listId: string, contact: Contact) {
+    setBusy(`remove-list-contact-${contact._id}`);
+    try {
+      await api(`/api/contacts/${contact._id}`, {
+        method: "PATCH",
+        body: JSON.stringify({
+          listIds: contact.listIds.filter((id) => id !== listId)
+        })
+      });
+      await refreshAll();
+      await fetchListContacts(listId);
+      setNotice("Contact removed from list");
+    } catch (err) {
+      setNotice(err instanceof Error ? err.message : "Could not remove contact");
+    } finally {
+      setBusy("");
+    }
+  }
+
   async function removeContactTag(contact: Contact, tag: string) {
     setBusy(`tag-${contact._id}-${tag}`);
     try {
@@ -741,10 +896,12 @@ export function DashboardClient({ user }: DashboardClientProps) {
 
       {activeTab === "inbox" ? (
         <Inbox
+          contacts={contacts}
           messages={messages}
           statuses={statuses}
           events={webhookEvents}
           busy={busy}
+          onSendMessage={sendInboxMessage}
           onRefresh={async () => {
             setBusy("messages");
             try {
@@ -797,6 +954,8 @@ export function DashboardClient({ user }: DashboardClientProps) {
           setSearch={setSearch}
           busy={busy}
           onCreate={createContact}
+          onUpdate={updateContact}
+          onImport={importContacts}
           onDelete={deleteContact}
           onRemoveTag={removeContactTag}
         />
@@ -805,12 +964,16 @@ export function DashboardClient({ user }: DashboardClientProps) {
       {activeTab === "lists" ? (
         <Lists
           lists={lists}
+          contacts={contacts}
           selectedListId={selectedListId}
           selectedListContacts={selectedListContacts}
           busy={busy}
           onCreate={createList}
+          onUpdate={updateList}
           onSelect={openList}
           onDelete={deleteList}
+          onAddContacts={addContactsToList}
+          onRemoveContact={removeContactFromList}
         />
       ) : null}
 

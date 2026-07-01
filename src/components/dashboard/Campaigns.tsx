@@ -62,6 +62,12 @@ export function Campaigns(props: {
     ? Math.round((props.progress.sent / props.progress.total) * 100)
     : 0;
   const sending = props.busy === "send" || props.busy === "media";
+  const shownContactIds = props.contacts.map((contact) => contact._id);
+  const shownSelectedCount = shownContactIds.filter((id) =>
+    props.selectedContactIds.has(id)
+  ).length;
+  const allShownSelected =
+    shownContactIds.length > 0 && shownSelectedCount === shownContactIds.length;
 
   return (
     <motion.div
@@ -345,6 +351,46 @@ export function Campaigns(props: {
               placeholder="Search contacts"
               className="pl-9"
             />
+          </div>
+
+          <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-moon-green/12 bg-muted/35 px-3 py-2">
+            <label className="flex cursor-pointer items-center gap-2 text-sm font-medium text-moon-ink">
+              <Checkbox
+                checked={
+                  allShownSelected
+                    ? true
+                    : shownSelectedCount > 0
+                      ? "indeterminate"
+                      : false
+                }
+                onCheckedChange={() => {
+                  const next = new Set(props.selectedContactIds);
+                  if (allShownSelected) {
+                    for (const id of shownContactIds) next.delete(id);
+                  } else {
+                    for (const id of shownContactIds) next.add(id);
+                  }
+                  props.setSelectedContactIds(next);
+                }}
+              />
+              Select all shown
+            </label>
+            <div className="flex items-center gap-2 text-xs text-muted-foreground">
+              <span>
+                {shownSelectedCount.toLocaleString()} of{" "}
+                {shownContactIds.length.toLocaleString()} shown
+              </span>
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                onClick={() => props.setSelectedContactIds(new Set())}
+                disabled={!props.selectedContactIds.size}
+                className="h-8 px-2"
+              >
+                Clear
+              </Button>
+            </div>
           </div>
 
           <div className="rounded-xl border border-moon-green/12">
