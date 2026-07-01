@@ -315,9 +315,12 @@ export function DashboardClient({ user }: DashboardClientProps) {
       }
       return nextMappings;
     });
+  }, [selectedTemplateName, templates]);
+
+  useEffect(() => {
     setHeaderImageId("");
     setHeaderImageName("");
-  }, [selectedTemplateName, templates]);
+  }, [selectedTemplateName]);
 
   async function logout() {
     await fetch("/api/auth/logout", { method: "POST" });
