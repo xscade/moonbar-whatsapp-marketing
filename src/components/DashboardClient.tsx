@@ -8,7 +8,8 @@ import type {
   Contact,
   ContactList,
   ContactTemplateField,
-  MessageTemplate
+  MessageTemplate,
+  TemplateBuilderPayload
 } from "@/types/entities";
 
 import { DashboardShell } from "./dashboard/DashboardShell";
@@ -332,31 +333,73 @@ export function DashboardClient({ user }: DashboardClientProps) {
     }
   }
 
-  async function createTemplate(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    const form = new FormData(event.currentTarget);
-    const payload = {
-      name: String(form.get("name") || ""),
-      language: String(form.get("language") || "en_US"),
-      category: String(form.get("category") || "UTILITY"),
-      status: "LOCAL",
-      body: String(form.get("body") || ""),
-      parameterFormat: "NAMED",
-      parameters: csvToArray(String(form.get("parameters") || "")).map((name) => ({
-        name
-      }))
-    };
-
+  async function submitTemplate(payload: TemplateBuilderPayload, id?: string) {
     setBusy("template");
     try {
-      await api("/api/templates", { method: "POST", body: JSON.stringify(payload) });
-      event.currentTarget.reset();
+      if (id) {
+        const result = await api<{ status?: string }>(`/api/templates/${id}`, {
+          method: "PATCH",
+          body: JSON.stringify(payload)
+        });
+        toast.success(
+          result.status === "PENDING"
+            ? "Template updated — resubmitted to Meta for review"
+            : "Template updated"
+        );
+      } else {
+        const result = await api<{ status?: string }>("/api/templates", {
+          method: "POST",
+          body: JSON.stringify(payload)
+        });
+        toast.success(`Template submitted to Meta (${result.status || "PENDING"})`);
+      }
       await refreshAll();
-      setNotice("Template saved");
+      return true;
     } catch (err) {
-      setNotice(err instanceof Error ? err.message : "Could not save template");
+      toast.error(err instanceof Error ? err.message : "Could not save template");
+      return false;
     } finally {
       setBusy("");
+    }
+  }
+
+  async function deleteTemplate(template: MessageTemplate) {
+    const confirmed = window.confirm(
+      `Delete "${template.name}"? It will be removed from Meta. An approved template name cannot be reused for 30 days.`
+    );
+    if (!confirmed) return;
+
+    setBusy(`delete-template-${template._id}`);
+    try {
+      await api(`/api/templates/${template._id}`, { method: "DELETE" });
+      toast.success("Template deleted");
+      await refreshAll();
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Could not delete template");
+    } finally {
+      setBusy("");
+    }
+  }
+
+  async function uploadTemplateMedia(file: File) {
+    try {
+      const formData = new FormData();
+      formData.set("file", file);
+      const response = await fetch("/api/templates/media", {
+        method: "POST",
+        body: formData
+      });
+      const body = await response.json();
+      if (!response.ok) {
+        throw new Error(body.error?.message || "Could not upload media");
+      }
+      return {
+        handle: body.handle as string,
+        filename: (body.filename as string) || file.name
+      };
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Could not upload media");
+      return null;
     }
   }
 
@@ -776,7 +819,9 @@ export function DashboardClient({ user }: DashboardClientProps) {
           templates={templates.length ? templates : [fallbackTemplate]}
           busy={busy}
           onSync={syncTemplates}
-          onCreate={createTemplate}
+          onSubmitTemplate={submitTemplate}
+          onDeleteTemplate={deleteTemplate}
+          onUploadTemplateMedia={uploadTemplateMedia}
         />
       ) : null}
 
