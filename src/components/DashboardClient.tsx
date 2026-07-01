@@ -22,7 +22,8 @@ import {
   Settings,
   Tag,
   Trash2,
-  UsersRound
+  UsersRound,
+  X
 } from "lucide-react";
 import { formatDistanceToNow } from "date-fns";
 import type {
@@ -30,6 +31,7 @@ import type {
   Campaign,
   Contact,
   ContactList,
+  ContactTemplateField,
   MessageTemplate
 } from "@/types/entities";
 
@@ -109,6 +111,35 @@ type WebhookEvent = {
   createdAt: string;
 };
 
+type CampaignProgress = {
+  campaignId?: string;
+  total: number;
+  sent: number;
+  acceptedCount: number;
+  failedCount: number;
+  currentName?: string;
+  currentPhone?: string;
+  currentStatus?: string;
+  error?: string;
+};
+
+type CampaignBatchResult = {
+  campaignId: string;
+  total: number;
+  sent: number;
+  acceptedCount: number;
+  failedCount: number;
+  queuedCount: number;
+  done: boolean;
+  status: string;
+  current?: {
+    name?: string;
+    phone?: string;
+    status?: string;
+    error?: string;
+  };
+};
+
 async function api<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(path, {
     ...init,
@@ -125,15 +156,23 @@ async function api<T>(path: string, init?: RequestInit): Promise<T> {
 }
 
 function csvToArray(value: string) {
+  const seen = new Set<string>();
   return value
     .split(",")
     .map((item) => item.trim())
-    .filter(Boolean);
+    .filter((item) => {
+      if (!item) return false;
+      const key = item.toLowerCase();
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
 }
 
 export function DashboardClient({ user }: DashboardClientProps) {
   const [activeTab, setActiveTab] = useState<TabKey>("overview");
   const [contacts, setContacts] = useState<Contact[]>([]);
+  const [contactTotal, setContactTotal] = useState(0);
   const [lists, setLists] = useState<ContactList[]>([]);
   const [templates, setTemplates] = useState<MessageTemplate[]>([]);
   const [campaigns, setCampaigns] = useState<Campaign[]>([]);
@@ -141,19 +180,27 @@ export function DashboardClient({ user }: DashboardClientProps) {
   const [statuses, setStatuses] = useState<WhatsAppStatus[]>([]);
   const [webhookEvents, setWebhookEvents] = useState<WebhookEvent[]>([]);
   const [diagnostics, setDiagnostics] = useState<Record<string, unknown> | null>(null);
+  const [selectedListId, setSelectedListId] = useState("");
+  const [selectedListContacts, setSelectedListContacts] = useState<Contact[]>([]);
   const [selectedContactIds, setSelectedContactIds] = useState<Set<string>>(new Set());
   const [selectedListIds, setSelectedListIds] = useState<Set<string>>(new Set());
   const [selectedTemplateName, setSelectedTemplateName] = useState("event_details_reminder_1");
   const [campaignName, setCampaignName] = useState("Weekend event reminder");
+  const [headerImageId, setHeaderImageId] = useState("");
+  const [headerImageName, setHeaderImageName] = useState("");
   const [parameterValues, setParameterValues] = useState<Record<string, string>>({
     djname: "DJ Ravi",
     day: "Friday",
     date: "21st March",
     time: "06:30 PM"
   });
+  const [contactFieldMappings, setContactFieldMappings] = useState<
+    Record<string, ContactTemplateField>
+  >({});
   const [search, setSearch] = useState("");
   const [busy, setBusy] = useState("");
   const [notice, setNotice] = useState("");
+  const [sendProgress, setSendProgress] = useState<CampaignProgress | null>(null);
 
   const selectedTemplate =
     templates.find((template) => template.name === selectedTemplateName) ??
@@ -170,38 +217,46 @@ export function DashboardClient({ user }: DashboardClientProps) {
     );
   }, [contacts, search]);
 
-  const campaignRecipients = useMemo(() => {
+  const campaignRecipientCount = useMemo(() => {
     const selectedLists = Array.from(selectedListIds);
-    return contacts.filter(
+    if (!selectedLists.length) return selectedContactIds.size;
+
+    const listTotal = lists
+      .filter((list) => selectedListIds.has(list._id))
+      .reduce((sum, list) => sum + (list.memberCount || 0), 0);
+    const extraSelectedContacts = contacts.filter(
       (contact) =>
-        selectedContactIds.has(contact._id) ||
-        contact.listIds.some((listId) => selectedLists.includes(listId))
-    );
-  }, [contacts, selectedContactIds, selectedListIds]);
+        selectedContactIds.has(contact._id) &&
+        !contact.listIds.some((listId) => selectedListIds.has(listId))
+    ).length;
+
+    return listTotal + extraSelectedContacts;
+  }, [contacts, lists, selectedContactIds, selectedListIds]);
 
   const stats = useMemo(() => {
     const accepted = campaigns.reduce((sum, campaign) => sum + campaign.acceptedCount, 0);
     const failed = campaigns.reduce((sum, campaign) => sum + campaign.failedCount, 0);
     return {
-      contacts: contacts.length,
+      contacts: contactTotal,
       lists: lists.length,
       templates: templates.length || 1,
       campaigns: campaigns.length,
       accepted,
       failed
     };
-  }, [campaigns, contacts.length, lists.length, templates.length]);
+  }, [campaigns, contactTotal, lists.length, templates.length]);
 
   async function refreshAll() {
     setBusy("loading");
     try {
       const [contactRes, listRes, templateRes, campaignRes] = await Promise.all([
-        api<{ data: Contact[] }>("/api/contacts"),
+        api<{ data: Contact[]; total: number }>("/api/contacts?limit=20000"),
         api<{ data: ContactList[] }>("/api/lists"),
         api<{ data: MessageTemplate[] }>("/api/templates"),
         api<{ data: Campaign[] }>("/api/campaigns")
       ]);
       setContacts(contactRes.data);
+      setContactTotal(contactRes.total);
       setLists(listRes.data);
       setTemplates(templateRes.data.length ? templateRes.data : [fallbackTemplate]);
       setCampaigns(campaignRes.data);
@@ -224,6 +279,13 @@ export function DashboardClient({ user }: DashboardClientProps) {
     setWebhookEvents(messageRes.events);
   }
 
+  async function fetchListContacts(listId: string) {
+    const result = await api<{ data: Contact[] }>(
+      `/api/contacts?listId=${encodeURIComponent(listId)}&limit=20000`
+    );
+    setSelectedListContacts(result.data);
+  }
+
   useEffect(() => {
     refreshAll();
   }, []);
@@ -232,13 +294,29 @@ export function DashboardClient({ user }: DashboardClientProps) {
     const nextTemplate =
       templates.find((template) => template.name === selectedTemplateName) ??
       fallbackTemplate;
-    const nextValues = { ...parameterValues };
-    for (const parameter of nextTemplate.parameters) {
-      if (!nextValues[parameter.name]) {
-        nextValues[parameter.name] = parameter.example || "";
+    setParameterValues((current) => {
+      const nextValues = { ...current };
+      for (const parameter of nextTemplate.parameters) {
+        if (!nextValues[parameter.name]) {
+          nextValues[parameter.name] = parameter.example || "";
+        }
       }
-    }
-    setParameterValues(nextValues);
+      return nextValues;
+    });
+    setContactFieldMappings((current) => {
+      const parameterNames = new Set(
+        nextTemplate.parameters.map((parameter) => parameter.name)
+      );
+      const nextMappings = Object.fromEntries(
+        Object.entries(current).filter(([name]) => parameterNames.has(name))
+      ) as Record<string, ContactTemplateField>;
+      if (parameterNames.has("name") && !nextMappings.name) {
+        nextMappings.name = "name";
+      }
+      return nextMappings;
+    });
+    setHeaderImageId("");
+    setHeaderImageName("");
   }, [selectedTemplateName, templates]);
 
   async function logout() {
@@ -264,7 +342,13 @@ export function DashboardClient({ user }: DashboardClientProps) {
     try {
       await api("/api/contacts", { method: "POST", body: JSON.stringify(payload) });
       formElement.reset();
+      setSearch(payload.name || payload.phone);
       await refreshAll();
+      const targetListId = payload.listIds[0] || selectedListId;
+      if (targetListId) {
+        setSelectedListId(targetListId);
+        await fetchListContacts(targetListId);
+      }
       setNotice("Contact saved");
     } catch (err) {
       setNotice(err instanceof Error ? err.message : "Could not save contact");
@@ -290,6 +374,46 @@ export function DashboardClient({ user }: DashboardClientProps) {
       setNotice("List created");
     } catch (err) {
       setNotice(err instanceof Error ? err.message : "Could not create list");
+    } finally {
+      setBusy("");
+    }
+  }
+
+  async function openList(listId: string) {
+    setSelectedListId(listId);
+    setBusy("list-detail");
+    try {
+      await fetchListContacts(listId);
+    } catch (err) {
+      setNotice(err instanceof Error ? err.message : "Could not load list contacts");
+    } finally {
+      setBusy("");
+    }
+  }
+
+  async function deleteList(id: string) {
+    const list = lists.find((item) => item._id === id);
+    const confirmed = window.confirm(
+      `Delete ${list?.name || "this list"}? Contacts will stay saved, but this tag/list will be removed from them.`
+    );
+    if (!confirmed) return;
+
+    setBusy(`delete-list-${id}`);
+    try {
+      await api(`/api/lists/${id}`, { method: "DELETE" });
+      setSelectedListIds((current) => {
+        const next = new Set(current);
+        next.delete(id);
+        return next;
+      });
+      if (selectedListId === id) {
+        setSelectedListId("");
+        setSelectedListContacts([]);
+      }
+      await refreshAll();
+      setNotice("List deleted");
+    } catch (err) {
+      setNotice(err instanceof Error ? err.message : "Could not delete list");
     } finally {
       setBusy("");
     }
@@ -340,34 +464,191 @@ export function DashboardClient({ user }: DashboardClientProps) {
   }
 
   async function sendCampaign() {
-    if (!campaignRecipients.length) {
+    if (!campaignRecipientCount) {
       setNotice("Select at least one contact or list");
       return;
     }
 
+    if (selectedTemplate.headerFormat === "IMAGE" && !headerImageId) {
+      setNotice("Upload a header image before sending this template");
+      return;
+    }
+
     setBusy("send");
+    setSendProgress({
+      total: campaignRecipientCount,
+      sent: 0,
+      acceptedCount: 0,
+      failedCount: 0
+    });
     try {
-      const result = await api<{ acceptedCount: number; failedCount: number }>(
-        "/api/campaigns/send",
-        {
+      const basePayload = {
+        name: campaignName,
+        templateName: selectedTemplate.name,
+        language: selectedTemplate.language,
+        parameters: parameterValues,
+        parameterOrder: selectedTemplate.parameters.map((parameter) => parameter.name),
+        contactFieldMappings,
+        headerImageId,
+        listIds: Array.from(selectedListIds),
+        contactIds: Array.from(selectedContactIds),
+        batchSize: 25
+      };
+
+      let campaignId = "";
+      let finalProgress: CampaignProgress | null = null;
+
+      while (true) {
+        const result = await api<CampaignBatchResult>("/api/campaigns/send", {
           method: "POST",
           body: JSON.stringify({
-            name: campaignName,
-            templateName: selectedTemplate.name,
-            language: selectedTemplate.language,
-            parameters: parameterValues,
-            parameterOrder: selectedTemplate.parameters.map((parameter) => parameter.name),
-            listIds: Array.from(selectedListIds),
-            contactIds: Array.from(selectedContactIds)
+            ...basePayload,
+            ...(campaignId ? { campaignId } : {})
           })
-        }
-      );
+        });
+
+        campaignId = result.campaignId;
+        finalProgress = {
+          campaignId: result.campaignId,
+          total: result.total || campaignRecipientCount,
+          sent: result.sent,
+          acceptedCount: result.acceptedCount,
+          failedCount: result.failedCount,
+          currentName: result.current?.name,
+          currentPhone: result.current?.phone,
+          currentStatus: result.current?.status,
+          error: result.current?.error
+        };
+        setSendProgress(finalProgress);
+
+        if (result.done) break;
+      }
+
       await refreshAll();
       setNotice(
-        `${result.acceptedCount} accepted, ${result.failedCount} failed by WhatsApp`
+        `${finalProgress?.acceptedCount || 0} accepted, ${finalProgress?.failedCount || 0} failed by WhatsApp`
       );
     } catch (err) {
       setNotice(err instanceof Error ? err.message : "Campaign failed");
+    } finally {
+      setBusy("");
+      setTimeout(() => setSendProgress(null), 3500);
+    }
+  }
+
+  async function resumeCampaign(campaign: Campaign) {
+    const queuedCount = campaign.recipients.filter(
+      (recipient) => recipient.status === "queued"
+    ).length;
+    if (!queuedCount) {
+      setNotice("This campaign has no queued recipients left");
+      return;
+    }
+
+    setBusy(`resume-${campaign._id}`);
+    setSendProgress({
+      campaignId: campaign._id,
+      total: campaign.recipients.length,
+      sent: campaign.recipients.length - queuedCount,
+      acceptedCount: campaign.acceptedCount,
+      failedCount: campaign.failedCount
+    });
+
+    try {
+      let finalProgress: CampaignProgress | null = null;
+
+      while (true) {
+        const result = await api<CampaignBatchResult>("/api/campaigns/send", {
+          method: "POST",
+          body: JSON.stringify({
+            campaignId: campaign._id,
+            name: campaign.name,
+            templateName: campaign.templateName,
+            language: campaign.language,
+            parameters: campaign.parameters || {},
+            parameterOrder: campaign.parameterOrder || [],
+            contactFieldMappings: campaign.contactFieldMappings || {},
+            headerImageId: campaign.headerImageId,
+            batchSize: 25
+          })
+        });
+
+        finalProgress = {
+          campaignId: result.campaignId,
+          total: result.total,
+          sent: result.sent,
+          acceptedCount: result.acceptedCount,
+          failedCount: result.failedCount,
+          currentName: result.current?.name,
+          currentPhone: result.current?.phone,
+          currentStatus: result.current?.status,
+          error: result.current?.error
+        };
+        setSendProgress(finalProgress);
+        setNotice(
+          `Resuming campaign: ${result.sent}/${result.total} processed, ${result.queuedCount} queued`
+        );
+        setCampaigns((current) =>
+          current.map((item) =>
+            item._id === campaign._id
+              ? {
+                  ...item,
+                  acceptedCount: result.acceptedCount,
+                  failedCount: result.failedCount,
+                  status: result.status as Campaign["status"],
+                  recipients: item.recipients.map((recipient, index) => {
+                    if (index < result.acceptedCount) return { ...recipient, status: "accepted" };
+                    if (index < result.acceptedCount + result.failedCount) {
+                      return { ...recipient, status: "failed" };
+                    }
+                    return { ...recipient, status: "queued" };
+                  })
+                }
+              : item
+          )
+        );
+
+        if (result.done) break;
+      }
+
+      await refreshAll();
+      setNotice(
+        `Resume complete: ${finalProgress?.acceptedCount || 0} accepted, ${finalProgress?.failedCount || 0} failed by WhatsApp`
+      );
+    } catch (err) {
+      await refreshAll();
+      setNotice(err instanceof Error ? err.message : "Could not resume campaign");
+    } finally {
+      setBusy("");
+      setTimeout(() => setSendProgress(null), 3500);
+    }
+  }
+
+  async function uploadHeaderImage(file: File) {
+    setBusy("media");
+    try {
+      const formData = new FormData();
+      formData.set("file", file);
+      const response = await fetch("/api/media/upload", {
+        method: "POST",
+        body: formData
+      });
+      const body = await response.json();
+      if (!response.ok) {
+        throw new Error(
+          body.error?.message ||
+            body.error?.error?.message ||
+            body.error ||
+            "Could not upload image"
+        );
+      }
+      setHeaderImageId(body.id);
+      setHeaderImageName(body.filename || file.name);
+      setNotice("Header image uploaded");
+    } catch (err) {
+      setHeaderImageId("");
+      setHeaderImageName("");
+      setNotice(err instanceof Error ? err.message : "Could not upload image");
     } finally {
       setBusy("");
     }
@@ -378,8 +659,41 @@ export function DashboardClient({ user }: DashboardClientProps) {
     try {
       await api(`/api/contacts/${id}`, { method: "DELETE" });
       await refreshAll();
+      if (selectedListId) {
+        await fetchListContacts(selectedListId);
+      }
     } catch (err) {
       setNotice(err instanceof Error ? err.message : "Could not delete contact");
+    } finally {
+      setBusy("");
+    }
+  }
+
+  async function removeContactTag(contact: Contact, tag: string) {
+    setBusy(`tag-${contact._id}-${tag}`);
+    try {
+      await api(`/api/contacts/${contact._id}`, {
+        method: "PATCH",
+        body: JSON.stringify({
+          tags: contact.tags.filter((item) => item !== tag)
+        })
+      });
+      setContacts((current) =>
+        current.map((item) =>
+          item._id === contact._id
+            ? { ...item, tags: item.tags.filter((tagName) => tagName !== tag) }
+            : item
+        )
+      );
+      setSelectedListContacts((current) =>
+        current.map((item) =>
+          item._id === contact._id
+            ? { ...item, tags: item.tags.filter((tagName) => tagName !== tag) }
+            : item
+        )
+      );
+    } catch (err) {
+      setNotice(err instanceof Error ? err.message : "Could not remove tag");
     } finally {
       setBusy("");
     }
@@ -476,6 +790,7 @@ export function DashboardClient({ user }: DashboardClientProps) {
               busy={busy}
               onSync={syncTemplates}
               onRefresh={refreshAll}
+              onResume={resumeCampaign}
             />
           ) : null}
 
@@ -513,10 +828,16 @@ export function DashboardClient({ user }: DashboardClientProps) {
               setCampaignName={setCampaignName}
               parameterValues={parameterValues}
               setParameterValues={setParameterValues}
+              contactFieldMappings={contactFieldMappings}
+              setContactFieldMappings={setContactFieldMappings}
               search={search}
               setSearch={setSearch}
-              recipientCount={campaignRecipients.length}
+              recipientCount={campaignRecipientCount}
+              headerImageId={headerImageId}
+              headerImageName={headerImageName}
               busy={busy}
+              progress={sendProgress}
+              onUploadHeaderImage={uploadHeaderImage}
               onSend={sendCampaign}
             />
           ) : null}
@@ -530,11 +851,20 @@ export function DashboardClient({ user }: DashboardClientProps) {
               busy={busy}
               onCreate={createContact}
               onDelete={deleteContact}
+              onRemoveTag={removeContactTag}
             />
           ) : null}
 
           {activeTab === "lists" ? (
-            <Lists lists={lists} busy={busy} onCreate={createList} />
+            <Lists
+              lists={lists}
+              selectedListId={selectedListId}
+              selectedListContacts={selectedListContacts}
+              busy={busy}
+              onCreate={createList}
+              onSelect={openList}
+              onDelete={deleteList}
+            />
           ) : null}
 
           {activeTab === "templates" ? (
@@ -547,7 +877,7 @@ export function DashboardClient({ user }: DashboardClientProps) {
           ) : null}
 
           {activeTab === "reports" ? (
-            <Reports campaigns={campaigns} />
+            <Reports campaigns={campaigns} busy={busy} onResume={resumeCampaign} />
           ) : null}
 
           {activeTab === "settings" ? (
@@ -589,7 +919,8 @@ function Overview({
   templates,
   busy,
   onSync,
-  onRefresh
+  onRefresh,
+  onResume
 }: {
   stats: Record<string, number>;
   campaigns: Campaign[];
@@ -597,6 +928,7 @@ function Overview({
   busy: string;
   onSync: () => void;
   onRefresh: () => void;
+  onResume: (campaign: Campaign) => void;
 }) {
   const statCards = [
     { label: "Contacts", value: stats.contacts, icon: UsersRound, color: "#414C2F" },
@@ -637,7 +969,11 @@ function Overview({
             </button>
           }
         >
-          <CampaignTable campaigns={campaigns.slice(0, 6)} />
+          <CampaignTable
+            campaigns={campaigns.slice(0, 6)}
+            busy={busy}
+            onResume={onResume}
+          />
         </Section>
 
         <Section
@@ -693,12 +1029,22 @@ function Campaigns(props: {
   setCampaignName: (value: string) => void;
   parameterValues: Record<string, string>;
   setParameterValues: (value: Record<string, string>) => void;
+  contactFieldMappings: Record<string, ContactTemplateField>;
+  setContactFieldMappings: (value: Record<string, ContactTemplateField>) => void;
   search: string;
   setSearch: (value: string) => void;
   recipientCount: number;
+  headerImageId: string;
+  headerImageName: string;
   busy: string;
+  progress: CampaignProgress | null;
+  onUploadHeaderImage: (file: File) => void;
   onSend: () => void;
 }) {
+  const percent = props.progress?.total
+    ? Math.round((props.progress.sent / props.progress.total) * 100)
+    : 0;
+
   return (
     <div className="grid gap-5 xl:grid-cols-[0.95fr_1.05fr]">
       <Section title="Campaign Builder">
@@ -730,39 +1076,142 @@ function Campaigns(props: {
           <div className="rounded-lg border border-moon-green/12 bg-moon-paper p-3 text-sm text-moon-ink/72">
             <p className="font-medium text-moon-ink">{props.selectedTemplate.name}</p>
             <p className="mt-2 whitespace-pre-line">{props.selectedTemplate.body}</p>
+            {props.selectedTemplate.headerFormat === "IMAGE" ? (
+              <p className="mt-3 rounded-md bg-moon-yellow/60 px-3 py-2 text-xs font-medium text-moon-ink">
+                Image header required
+              </p>
+            ) : null}
           </div>
 
+          {props.selectedTemplate.headerFormat === "IMAGE" ? (
+            <label className="field-label">
+              Header image
+              <input
+                type="file"
+                accept="image/png,image/jpeg,image/webp"
+                className="field"
+                disabled={props.busy === "media"}
+                onChange={(event) => {
+                  const file = event.target.files?.[0];
+                  if (file) props.onUploadHeaderImage(file);
+                }}
+              />
+              {props.headerImageId ? (
+                <span className="text-xs font-medium text-moon-green">
+                  Uploaded: {props.headerImageName || props.headerImageId}
+                </span>
+              ) : null}
+            </label>
+          ) : null}
+
           <div className="grid gap-3 sm:grid-cols-2">
-            {props.selectedTemplate.parameters.map((parameter) => (
-              <label key={parameter.name} className="field-label">
-                {parameter.name}
-                <input
-                  value={props.parameterValues[parameter.name] || ""}
-                  placeholder={parameter.example || parameter.name}
-                  onChange={(event) =>
-                    props.setParameterValues({
-                      ...props.parameterValues,
-                      [parameter.name]: event.target.value
-                    })
-                  }
-                  className="field"
-                />
-              </label>
-            ))}
+            {props.selectedTemplate.parameters.map((parameter) => {
+              const mappedField = props.contactFieldMappings[parameter.name];
+
+              return (
+                <div
+                  key={parameter.name}
+                  className="grid gap-2 rounded-lg border border-moon-green/12 bg-white/70 p-3"
+                >
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <span className="text-sm font-medium text-moon-ink">
+                      {parameter.name}
+                    </span>
+                    <select
+                      value={mappedField || ""}
+                      onChange={(event) => {
+                        const nextMappings = { ...props.contactFieldMappings };
+                        const value = event.target.value as ContactTemplateField | "";
+                        if (value) {
+                          nextMappings[parameter.name] = value;
+                        } else {
+                          delete nextMappings[parameter.name];
+                        }
+                        props.setContactFieldMappings(nextMappings);
+                      }}
+                      className="field w-auto min-w-36 py-2"
+                    >
+                      <option value="">Custom text</option>
+                      <option value="name">Contact name</option>
+                    </select>
+                  </div>
+                  <input
+                    value={
+                      mappedField === "name"
+                        ? "Contact name"
+                        : props.parameterValues[parameter.name] || ""
+                    }
+                    placeholder={parameter.example || parameter.name}
+                    disabled={Boolean(mappedField)}
+                    onChange={(event) =>
+                      props.setParameterValues({
+                        ...props.parameterValues,
+                        [parameter.name]: event.target.value
+                      })
+                    }
+                    className="field disabled:bg-moon-cream disabled:text-moon-ink/58"
+                  />
+                </div>
+              );
+            })}
           </div>
 
           <button
             onClick={props.onSend}
-            disabled={props.busy === "send" || props.recipientCount === 0}
+            disabled={
+              props.busy === "send" ||
+              props.busy === "media" ||
+              props.recipientCount === 0 ||
+              (props.selectedTemplate.headerFormat === "IMAGE" && !props.headerImageId)
+            }
             className="primary-button justify-center"
           >
-            {props.busy === "send" ? (
+            {props.busy === "send" || props.busy === "media" ? (
               <Loader2 className="h-4 w-4 animate-spin" />
             ) : (
               <Send className="h-4 w-4" />
             )}
             Send to {props.recipientCount}
           </button>
+
+          {props.progress ? (
+            <div className="rounded-lg border border-moon-green/12 bg-moon-paper p-3">
+              <div className="mb-2 flex flex-wrap items-center justify-between gap-2 text-sm">
+                <span className="font-medium text-moon-ink">
+                  Sending {props.progress.sent} of {props.progress.total}
+                </span>
+                <span className="font-semibold text-moon-red">{percent}%</span>
+              </div>
+              <div className="h-3 overflow-hidden rounded-full bg-white ring-1 ring-moon-green/12">
+                <div
+                  className="h-full rounded-full bg-moon-red transition-all duration-300"
+                  style={{ width: `${Math.min(percent, 100)}%` }}
+                />
+              </div>
+              <div className="mt-3 grid gap-2 text-xs text-moon-ink/62 sm:grid-cols-3">
+                <span>
+                  Accepted: <strong className="text-moon-green">{props.progress.acceptedCount}</strong>
+                </span>
+                <span>
+                  Failed: <strong className="text-moon-red">{props.progress.failedCount}</strong>
+                </span>
+                <span>
+                  Remaining: {Math.max(props.progress.total - props.progress.sent, 0)}
+                </span>
+              </div>
+              {props.progress.currentName || props.progress.currentPhone ? (
+                <p className="mt-2 truncate text-xs text-moon-ink/58">
+                  Last: {props.progress.currentName || props.progress.currentPhone}
+                  {props.progress.currentStatus ? ` - ${props.progress.currentStatus}` : ""}
+                </p>
+              ) : null}
+              {props.progress.error ? (
+                <p className="mt-2 line-clamp-2 text-xs text-moon-red">
+                  {props.progress.error}
+                </p>
+              ) : null}
+            </div>
+          ) : null}
         </div>
       </Section>
 
@@ -977,6 +1426,7 @@ function Contacts(props: {
   busy: string;
   onCreate: (event: FormEvent<HTMLFormElement>) => void;
   onDelete: (id: string) => void;
+  onRemoveTag: (contact: Contact, tag: string) => void;
 }) {
   return (
     <div className="grid gap-5 xl:grid-cols-[0.68fr_1.32fr]">
@@ -1059,7 +1509,27 @@ function Contacts(props: {
                 <tr key={contact._id} className="border-b border-moon-green/10">
                   <td className="px-3 py-3 font-medium text-moon-ink">{contact.name}</td>
                   <td className="px-3 py-3 text-moon-ink/65">+{contact.phone}</td>
-                  <td className="px-3 py-3 text-moon-ink/65">{contact.tags.join(", ")}</td>
+                  <td className="px-3 py-3 text-moon-ink/65">
+                    <div className="flex flex-wrap gap-1.5">
+                      {contact.tags.map((tag) => (
+                        <span
+                          key={tag}
+                          className="inline-flex items-center gap-1 rounded-md border border-moon-green/15 bg-moon-paper px-2 py-1 text-xs font-medium text-moon-ink"
+                        >
+                          {tag}
+                          <button
+                            type="button"
+                            onClick={() => props.onRemoveTag(contact, tag)}
+                            className="text-moon-red transition hover:text-moon-ink"
+                            title={`Remove ${tag}`}
+                          >
+                            <X className="h-3 w-3" />
+                          </button>
+                        </span>
+                      ))}
+                      {!contact.tags.length ? <span>-</span> : null}
+                    </div>
+                  </td>
                   <td className="px-3 py-3 text-moon-ink/65">{contact.consentStatus}</td>
                   <td className="px-3 py-3 text-right">
                     <button
@@ -1085,13 +1555,23 @@ function Contacts(props: {
 
 function Lists({
   lists,
+  selectedListId,
+  selectedListContacts,
   busy,
-  onCreate
+  onCreate,
+  onSelect,
+  onDelete
 }: {
   lists: ContactList[];
+  selectedListId: string;
+  selectedListContacts: Contact[];
   busy: string;
   onCreate: (event: FormEvent<HTMLFormElement>) => void;
+  onSelect: (id: string) => void;
+  onDelete: (id: string) => void;
 }) {
+  const selectedList = lists.find((list) => list._id === selectedListId);
+
   return (
     <div className="grid gap-5 xl:grid-cols-[0.7fr_1.3fr]">
       <Section title="New List">
@@ -1119,19 +1599,104 @@ function Lists({
       <Section title="Contact Lists">
         <div className="grid gap-3 sm:grid-cols-2">
           {lists.map((list) => (
-            <div key={list._id} className="rounded-lg border border-moon-green/12 bg-moon-paper p-4">
-              <div
-                className="mb-4 h-2 rounded-full"
-                style={{ backgroundColor: list.color }}
-              />
-              <h3 className="font-semibold text-moon-ink">{list.name}</h3>
-              <p className="mt-2 text-sm text-moon-ink/62">{list.description || "No note"}</p>
-              <p className="mt-4 text-sm font-medium text-moon-red">
-                {list.memberCount || 0} contacts
-              </p>
+            <div
+              key={list._id}
+              className={`relative rounded-lg border bg-moon-paper p-4 transition hover:-translate-y-0.5 hover:border-moon-red/45 hover:shadow-soft ${
+                selectedListId === list._id
+                  ? "border-moon-red/55 ring-2 ring-moon-red/10"
+                  : "border-moon-green/12"
+              }`}
+            >
+              <button
+                type="button"
+                onClick={() => onSelect(list._id)}
+                className="block w-full text-left"
+              >
+                <div
+                  className="mb-4 h-2 rounded-full"
+                  style={{ backgroundColor: list.color }}
+                />
+                <h3 className="pr-10 font-semibold text-moon-ink">{list.name}</h3>
+                <p className="mt-2 min-h-10 text-sm text-moon-ink/62">
+                  {list.description || "No note"}
+                </p>
+                <p className="mt-4 text-sm font-medium text-moon-red">
+                  {list.memberCount || 0} contacts
+                </p>
+              </button>
+              <button
+                type="button"
+                onClick={() => onDelete(list._id)}
+                disabled={busy === `delete-list-${list._id}`}
+                className="icon-button absolute right-3 top-3 text-moon-red"
+                title="Delete list"
+              >
+                {busy === `delete-list-${list._id}` ? (
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                ) : (
+                  <Trash2 className="h-4 w-4" />
+                )}
+              </button>
             </div>
           ))}
+          {!lists.length ? (
+            <p className="rounded-lg border border-moon-green/12 bg-moon-paper p-4 text-sm text-moon-ink/58">
+              No lists yet
+            </p>
+          ) : null}
         </div>
+
+        {selectedList ? (
+          <div className="mt-5 rounded-lg border border-moon-green/12 bg-white/80">
+            <div className="flex flex-wrap items-start justify-between gap-3 border-b border-moon-green/10 p-4">
+              <div>
+                <p className="text-xs font-semibold uppercase tracking-[0.16em] text-moon-ink/45">
+                  Selected list
+                </p>
+                <h3 className="mt-1 text-lg font-semibold text-moon-ink">
+                  {selectedList.name}
+                </h3>
+              </div>
+              <span className="rounded-md bg-moon-green px-3 py-1 text-sm font-medium text-moon-paper">
+                {selectedListContacts.length} loaded
+              </span>
+            </div>
+            {busy === "list-detail" ? (
+              <div className="flex items-center gap-2 p-4 text-sm text-moon-ink/62">
+                <Loader2 className="h-4 w-4 animate-spin" />
+                Loading contacts
+              </div>
+            ) : (
+              <div className="max-h-[420px] overflow-auto moon-scrollbar">
+                <table className="min-w-full text-left text-sm">
+                  <thead className="sticky top-0 bg-moon-green text-moon-paper">
+                    <tr>
+                      <th className="px-3 py-3 font-medium">Name</th>
+                      <th className="px-3 py-3 font-medium">Phone</th>
+                      <th className="px-3 py-3 font-medium">Source</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {selectedListContacts.map((contact) => (
+                      <tr key={contact._id} className="border-b border-moon-green/10 last:border-0">
+                        <td className="px-3 py-3 font-medium text-moon-ink">{contact.name}</td>
+                        <td className="px-3 py-3 text-moon-ink/65">+{contact.phone}</td>
+                        <td className="px-3 py-3 text-moon-ink/65">{contact.source || "-"}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+                {!selectedListContacts.length ? (
+                  <p className="p-4 text-sm text-moon-ink/58">No contacts in this list</p>
+                ) : null}
+              </div>
+            )}
+          </div>
+        ) : (
+          <p className="mt-5 rounded-lg border border-moon-green/12 bg-moon-paper p-4 text-sm text-moon-ink/58">
+            Select a list to view its contacts.
+          </p>
+        )}
       </Section>
     </div>
   );
@@ -1216,15 +1781,31 @@ function Templates({
   );
 }
 
-function Reports({ campaigns }: { campaigns: Campaign[] }) {
+function Reports({
+  campaigns,
+  busy,
+  onResume
+}: {
+  campaigns: Campaign[];
+  busy: string;
+  onResume: (campaign: Campaign) => void;
+}) {
   return (
     <Section title="Campaign History">
-      <CampaignTable campaigns={campaigns} />
+      <CampaignTable campaigns={campaigns} busy={busy} onResume={onResume} />
     </Section>
   );
 }
 
-function CampaignTable({ campaigns }: { campaigns: Campaign[] }) {
+function CampaignTable({
+  campaigns,
+  busy,
+  onResume
+}: {
+  campaigns: Campaign[];
+  busy: string;
+  onResume: (campaign: Campaign) => void;
+}) {
   return (
     <div className="overflow-auto rounded-lg border border-moon-green/12 moon-scrollbar">
       <table className="min-w-full text-left text-sm">
@@ -1234,23 +1815,65 @@ function CampaignTable({ campaigns }: { campaigns: Campaign[] }) {
             <th className="px-3 py-3 font-medium">Template</th>
             <th className="px-3 py-3 font-medium">Accepted</th>
             <th className="px-3 py-3 font-medium">Failed</th>
+            <th className="px-3 py-3 font-medium">Queued</th>
             <th className="px-3 py-3 font-medium">Sent</th>
+            <th className="px-3 py-3 font-medium">Action</th>
           </tr>
         </thead>
         <tbody>
-          {campaigns.map((campaign) => (
-            <tr key={campaign._id} className="border-b border-moon-green/10">
-              <td className="px-3 py-3 font-medium text-moon-ink">{campaign.name}</td>
-              <td className="px-3 py-3 text-moon-ink/65">{campaign.templateName}</td>
-              <td className="px-3 py-3 text-moon-green">{campaign.acceptedCount}</td>
-              <td className="px-3 py-3 text-moon-red">{campaign.failedCount}</td>
-              <td className="px-3 py-3 text-moon-ink/65">
-                {campaign.sentAt
-                  ? `${formatDistanceToNow(new Date(campaign.sentAt))} ago`
-                  : campaign.status}
-              </td>
-            </tr>
-          ))}
+          {campaigns.map((campaign) => {
+            const queuedCount = campaign.recipients.filter(
+              (recipient) => recipient.status === "queued"
+            ).length;
+            const canResume = queuedCount > 0;
+            const isResuming = busy === `resume-${campaign._id}`;
+
+            return (
+              <tr
+                key={campaign._id}
+                className={`border-b border-moon-green/10 ${
+                  canResume ? "bg-moon-yellow/25" : ""
+                }`}
+              >
+                <td className="px-3 py-3 font-medium text-moon-ink">
+                  <span>{campaign.name}</span>
+                  {canResume ? (
+                    <span className="mt-1 block rounded-md bg-moon-red px-2 py-1 text-xs font-semibold text-white">
+                      Interrupted - {queuedCount} queued
+                    </span>
+                  ) : null}
+                </td>
+                <td className="px-3 py-3 text-moon-ink/65">{campaign.templateName}</td>
+                <td className="px-3 py-3 text-moon-green">{campaign.acceptedCount}</td>
+                <td className="px-3 py-3 text-moon-red">{campaign.failedCount}</td>
+                <td className="px-3 py-3 font-medium text-moon-ink">{queuedCount}</td>
+                <td className="px-3 py-3 text-moon-ink/65">
+                  {campaign.sentAt
+                    ? `${formatDistanceToNow(new Date(campaign.sentAt))} ago`
+                    : campaign.status}
+                </td>
+                <td className="px-3 py-3">
+                  {canResume ? (
+                    <button
+                      type="button"
+                      onClick={() => onResume(campaign)}
+                      disabled={isResuming || busy === "send"}
+                      className="primary-button whitespace-nowrap px-3 py-2 text-xs"
+                    >
+                      {isResuming ? (
+                        <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                      ) : (
+                        <RefreshCw className="h-3.5 w-3.5" />
+                      )}
+                      Resume queued
+                    </button>
+                  ) : (
+                    <span className="text-xs text-moon-ink/45">Done</span>
+                  )}
+                </td>
+              </tr>
+            );
+          })}
         </tbody>
       </table>
       {!campaigns.length ? (

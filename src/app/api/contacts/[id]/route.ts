@@ -15,6 +15,19 @@ const contactPatchSchema = z.object({
   consentStatus: z.enum(["subscribed", "unsubscribed"]).optional()
 });
 
+function normalizeTags(tags: string[]) {
+  const seen = new Set<string>();
+  return tags
+    .map((tag) => tag.trim())
+    .filter((tag) => {
+      if (!tag) return false;
+      const key = tag.toLowerCase();
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+}
+
 export async function PATCH(
   request: Request,
   { params }: { params: Promise<{ id: string }> }
@@ -27,6 +40,7 @@ export async function PATCH(
 
     const update: Record<string, unknown> = { ...parsed.data, updatedAt: new Date() };
     if (parsed.data.phone) update.phone = normalizePhone(parsed.data.phone);
+    if (parsed.data.tags) update.tags = normalizeTags(parsed.data.tags);
     if (parsed.data.listIds) update.listIds = parsed.data.listIds.filter(ObjectId.isValid);
 
     const db = await getDb();

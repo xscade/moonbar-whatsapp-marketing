@@ -7,6 +7,8 @@ type SendTemplateInput = {
   language: string;
   parameters: Record<string, string>;
   parameterOrder: string[];
+  headerImageId?: string;
+  headerImageUrl?: string;
 };
 
 export async function sendTemplate(input: SendTemplateInput) {
@@ -17,17 +19,35 @@ export async function sendTemplate(input: SendTemplateInput) {
     language: { code: input.language }
   };
 
+  const components: Array<Record<string, unknown>> = [];
+
+  if (input.headerImageId || input.headerImageUrl) {
+    components.push({
+      type: "header",
+      parameters: [
+        {
+          type: "image",
+          image: input.headerImageId
+            ? { id: input.headerImageId }
+            : { link: input.headerImageUrl }
+        }
+      ]
+    });
+  }
+
   if (input.parameterOrder.length) {
-    template.components = [
-      {
-        type: "body",
-        parameters: input.parameterOrder.map((name) => ({
-          type: "text",
-          parameter_name: name,
-          text: input.parameters[name] || ""
-        }))
-      }
-    ];
+    components.push({
+      type: "body",
+      parameters: input.parameterOrder.map((name) => ({
+        type: "text",
+        parameter_name: name,
+        text: input.parameters[name] || ""
+      }))
+    });
+  }
+
+  if (components.length) {
+    template.components = components;
   }
 
   const body = {

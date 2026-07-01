@@ -9,6 +9,14 @@ const listSchema = z.object({
   color: z.string().default("#414C2F")
 });
 
+function normalizeListName(name: string) {
+  return name.trim().replace(/\s+/g, " ");
+}
+
+function listNameKey(name: string) {
+  return normalizeListName(name).toLowerCase();
+}
+
 export async function GET() {
   try {
     await requireUser();
@@ -43,8 +51,29 @@ export async function POST(request: Request) {
 
     const db = await getDb();
     const now = new Date();
+    const name = normalizeListName(parsed.data.name);
+    const normalizedName = listNameKey(name);
+
+    const existingLists = await db
+      .collection("contact_lists")
+      .find({}, { projection: { name: 1, normalizedName: 1 } })
+      .toArray();
+    const duplicate = existingLists.find((list) => {
+      const existingKey =
+        typeof list.normalizedName === "string"
+          ? list.normalizedName
+          : listNameKey(String(list.name || ""));
+      return existingKey === normalizedName;
+    });
+
+    if (duplicate) {
+      return error("A list with this name already exists", 409);
+    }
+
     const result = await db.collection("contact_lists").insertOne({
       ...parsed.data,
+      name,
+      normalizedName,
       createdAt: now,
       updatedAt: now
     });

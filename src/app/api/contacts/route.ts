@@ -15,6 +15,19 @@ const contactSchema = z.object({
   consentStatus: z.enum(["subscribed", "unsubscribed"]).default("subscribed")
 });
 
+function normalizeTags(tags: string[]) {
+  const seen = new Set<string>();
+  return tags
+    .map((tag) => tag.trim())
+    .filter((tag) => {
+      if (!tag) return false;
+      const key = tag.toLowerCase();
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+}
+
 export async function GET(request: Request) {
   try {
     await requireUser();
@@ -22,6 +35,11 @@ export async function GET(request: Request) {
     const url = new URL(request.url);
     const search = url.searchParams.get("search")?.trim();
     const listId = url.searchParams.get("listId")?.trim();
+    const requestedLimit = Number(url.searchParams.get("limit") || 20000);
+    const limit = Math.min(
+      Math.max(Number.isFinite(requestedLimit) ? requestedLimit : 20000, 1),
+      50000
+    );
     const filter: Record<string, unknown> = {};
 
     if (search) {
@@ -37,11 +55,13 @@ export async function GET(request: Request) {
     const contacts = await db
       .collection("contacts")
       .find(filter)
-      .sort({ createdAt: -1 })
-      .limit(500)
+      .sort({ updatedAt: -1, createdAt: -1 })
+      .limit(limit)
       .toArray();
 
-    return json({ data: serializeDocs(contacts) });
+    const total = await db.collection("contacts").countDocuments(filter);
+
+    return json({ data: serializeDocs(contacts), total, limit });
   } catch (err) {
     return handleRouteError(err);
   }
@@ -64,6 +84,7 @@ export async function POST(request: Request) {
         $set: {
           ...parsed.data,
           phone,
+          tags: normalizeTags(parsed.data.tags),
           listIds,
           updatedAt: now
         },

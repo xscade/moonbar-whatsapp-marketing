@@ -4,15 +4,343 @@ import { error, handleRouteError, json, requireUser } from "@/lib/api";
 import { getDb } from "@/lib/mongodb";
 import { sendTemplate } from "@/lib/whatsapp";
 
+export const maxDuration = 60;
+
 const sendSchema = z.object({
-  name: z.string().min(1),
-  templateName: z.string().min(1),
-  language: z.string().min(2),
+  name: z.string().min(1).optional(),
+  templateName: z.string().min(1).optional(),
+  language: z.string().min(2).optional(),
   parameters: z.record(z.string()),
   parameterOrder: z.array(z.string()).default([]),
+  contactFieldMappings: z.record(z.enum(["name"])).default({}),
+  headerImageId: z.string().optional(),
   listIds: z.array(z.string()).default([]),
-  contactIds: z.array(z.string()).default([])
+  contactIds: z.array(z.string()).default([]),
+  campaignId: z.string().optional(),
+  batchSize: z.number().int().min(1).max(100).default(25)
 });
+
+type Recipient = {
+  contactId?: string;
+  name: string;
+  phone: string;
+  status: "queued" | "accepted" | "failed";
+  messageId?: string;
+  error?: string;
+  lastStatus?: string;
+  lastStatusAt?: Date;
+  errors?: unknown;
+};
+
+type ContactField = "name";
+
+function isTemplateConfigurationError(message?: string) {
+  if (!message) return false;
+  return (
+    message.includes("#132000") ||
+    message.includes("#132012") ||
+    message.includes("Number of parameters") ||
+    message.includes("Parameter format") ||
+    message.includes("Media upload error")
+  );
+}
+
+function getRecipientFieldValue(recipient: Recipient, field: ContactField) {
+  if (field === "name") return recipient.name || "";
+  return "";
+}
+
+function resolveParametersForRecipient({
+  parameters,
+  contactFieldMappings,
+  recipient
+}: {
+  parameters: Record<string, string>;
+  contactFieldMappings: Record<string, ContactField>;
+  recipient: Recipient;
+}) {
+  const resolved = { ...parameters };
+  for (const [parameterName, field] of Object.entries(contactFieldMappings)) {
+    resolved[parameterName] = getRecipientFieldValue(recipient, field);
+  }
+  return resolved;
+}
+
+async function createCampaign({
+  userId,
+  data
+}: {
+  userId: string;
+  data: z.infer<typeof sendSchema>;
+}) {
+  if (!data.name || !data.templateName || !data.language) {
+    throw new Error("Campaign name, template, and language are required");
+  }
+
+  const db = await getDb();
+  const recipientFilter: Record<string, unknown> = {
+    consentStatus: "subscribed"
+  };
+
+  if (data.contactIds.length || data.listIds.length) {
+    recipientFilter.$or = [];
+    if (data.contactIds.length) {
+      (recipientFilter.$or as unknown[]).push({
+        _id: {
+          $in: data.contactIds.filter(ObjectId.isValid).map((id) => new ObjectId(id))
+        }
+      });
+    }
+    if (data.listIds.length) {
+      (recipientFilter.$or as unknown[]).push({ listIds: { $in: data.listIds } });
+    }
+  }
+
+  const contacts = await db
+    .collection("contacts")
+    .find(recipientFilter)
+    .limit(5000)
+    .toArray();
+
+  if (!contacts.length) throw new Error("No subscribed recipients selected");
+
+  const template = await db.collection("message_templates").findOne({
+    name: data.templateName,
+    language: data.language
+  });
+
+  if (template?.headerFormat === "IMAGE" && !data.headerImageId) {
+    throw new Error("Upload a header image before sending this template");
+  }
+
+  const now = new Date();
+  const result = await db.collection("campaigns").insertOne({
+    name: data.name,
+    templateName: data.templateName,
+    language: data.language,
+    parameters: data.parameters,
+    parameterOrder: data.parameterOrder,
+    contactFieldMappings: data.contactFieldMappings,
+    headerImageId: data.headerImageId,
+    listIds: data.listIds,
+    recipients: contacts.map((contact) => ({
+      contactId: contact._id.toString(),
+      name: contact.name,
+      phone: contact.phone,
+      status: "queued"
+    })),
+    status: "sending",
+    acceptedCount: 0,
+    failedCount: 0,
+    createdBy: userId,
+    createdAt: now,
+    updatedAt: now
+  });
+
+  return result.insertedId;
+}
+
+async function processCampaignBatch({
+  campaignId,
+  data
+}: {
+  campaignId: ObjectId;
+  data: z.infer<typeof sendSchema>;
+}) {
+  const db = await getDb();
+  const campaign = await db.collection("campaigns").findOne({ _id: campaignId });
+  if (!campaign) throw new Error("Campaign not found");
+
+  const recipients = Array.isArray(campaign.recipients)
+    ? ([...campaign.recipients] as Recipient[])
+    : [];
+  const total = recipients.length;
+  const batchIndexes = recipients
+    .map((recipient, index) => ({ recipient, index }))
+    .filter(({ recipient }) => recipient.status === "queued")
+    .slice(0, data.batchSize);
+
+  if (!batchIndexes.length) {
+    const acceptedCount = recipients.filter((recipient) => recipient.status === "accepted").length;
+    const failedCount = recipients.filter((recipient) => recipient.status === "failed").length;
+    const finalStatus = failedCount === 0 ? "sent" : acceptedCount > 0 ? "partial" : "failed";
+    await db.collection("campaigns").updateOne(
+      { _id: campaignId },
+      {
+        $set: {
+          acceptedCount,
+          failedCount,
+          status: finalStatus,
+          sentAt: campaign.sentAt || new Date(),
+          updatedAt: new Date()
+        }
+      }
+    );
+    return {
+      campaignId: campaignId.toString(),
+      total,
+      sent: total,
+      acceptedCount,
+      failedCount,
+      queuedCount: 0,
+      done: true,
+      status: finalStatus
+    };
+  }
+
+  const templateName = data.templateName || campaign.templateName;
+  const language = data.language || campaign.language;
+  const parameters = Object.keys(data.parameters || {}).length
+    ? data.parameters
+    : campaign.parameters;
+  const contactFieldMappings = Object.keys(data.contactFieldMappings || {}).length
+    ? data.contactFieldMappings
+    : campaign.contactFieldMappings || {};
+  let parameterOrder = data.parameterOrder?.length
+    ? data.parameterOrder
+    : campaign.parameterOrder || [];
+  let headerImageId = data.headerImageId || campaign.headerImageId;
+
+  if (!headerImageId) {
+    const priorMessage = await db.collection("whatsapp_messages").findOne(
+      {
+        campaignId: campaignId.toString(),
+        "payload.headerImageId": { $exists: true, $ne: "" }
+      },
+      { projection: { "payload.headerImageId": 1 } }
+    );
+    headerImageId = priorMessage?.payload?.headerImageId;
+  }
+
+  const template = await db.collection("message_templates").findOne({
+    name: templateName,
+    language
+  });
+
+  if (!parameterOrder.length && Array.isArray(template?.parameters)) {
+    parameterOrder = template.parameters
+      .map((parameter: { name?: string }) => parameter.name)
+      .filter(Boolean);
+  }
+
+  if (template?.headerFormat === "IMAGE" && !headerImageId) {
+    throw new Error(
+      "This campaign needs its original header image. Upload and resend as a new campaign, or contact support to recover the media id."
+    );
+  }
+  let current: Record<string, unknown> | undefined;
+
+  for (const { recipient, index } of batchIndexes) {
+    const resolvedParameters = resolveParametersForRecipient({
+      parameters,
+      contactFieldMappings,
+      recipient
+    });
+
+    const response = await sendTemplate({
+      to: recipient.phone,
+      templateName,
+      language,
+      parameters: resolvedParameters,
+      parameterOrder,
+      headerImageId
+    });
+
+    const message = response.result?.messages?.[0];
+    if (message?.id) {
+      await db.collection("whatsapp_messages").updateOne(
+        { messageId: message.id },
+        {
+          $setOnInsert: {
+            messageId: message.id,
+            direction: "outbound",
+            from: process.env.WHATSAPP_PHONE_NUMBER_ID,
+            to: recipient.phone,
+            contactName: recipient.name,
+            type: "template",
+            templateName,
+            text: templateName,
+            payload: {
+              templateName,
+              language,
+              parameters: resolvedParameters,
+              contactFieldMappings,
+              headerImageId
+            },
+            campaignId: campaignId.toString(),
+            createdAt: new Date()
+          },
+          $set: {
+            lastStatus: message.message_status || "accepted",
+            updatedAt: new Date()
+          }
+        },
+        { upsert: true }
+      );
+    }
+
+    const errorMessage = response.ok
+      ? undefined
+      : response.result?.error?.message || JSON.stringify(response.result);
+
+    if (!response.ok && isTemplateConfigurationError(errorMessage)) {
+      throw new Error(
+        `Campaign resume stopped before sending more recipients: ${errorMessage}`
+      );
+    }
+
+    recipients[index] = {
+      ...recipient,
+      status: response.ok ? "accepted" : "failed",
+      messageId: message?.id,
+      error: errorMessage
+    };
+
+    current = {
+      name: recipient.name,
+      phone: recipient.phone,
+      status: recipients[index].status,
+      error: errorMessage
+    };
+  }
+
+  const acceptedCount = recipients.filter((recipient) => recipient.status === "accepted").length;
+  const failedCount = recipients.filter((recipient) => recipient.status === "failed").length;
+  const queuedCount = recipients.filter((recipient) => recipient.status === "queued").length;
+  const status = queuedCount > 0
+    ? "sending"
+    : failedCount === 0
+      ? "sent"
+      : acceptedCount > 0
+        ? "partial"
+        : "failed";
+
+  await db.collection("campaigns").updateOne(
+    { _id: campaignId },
+    {
+      $set: {
+        recipients,
+        acceptedCount,
+        failedCount,
+        status,
+        ...(queuedCount === 0 ? { sentAt: new Date() } : {}),
+        updatedAt: new Date()
+      }
+    }
+  );
+
+  return {
+    campaignId: campaignId.toString(),
+    total,
+    sent: total - queuedCount,
+    acceptedCount,
+    failedCount,
+    queuedCount,
+    done: queuedCount === 0,
+    status,
+    current
+  };
+}
 
 export async function POST(request: Request) {
   try {
@@ -20,132 +348,16 @@ export async function POST(request: Request) {
     const parsed = sendSchema.safeParse(await request.json());
     if (!parsed.success) return error("Invalid campaign payload", 422, parsed.error.flatten());
 
-    const db = await getDb();
-    const recipientFilter: Record<string, unknown> = {
-      consentStatus: "subscribed"
-    };
-
-    if (parsed.data.contactIds.length || parsed.data.listIds.length) {
-      recipientFilter.$or = [];
-      if (parsed.data.contactIds.length) {
-        (recipientFilter.$or as unknown[]).push({
-          _id: {
-            $in: parsed.data.contactIds
-              .filter(ObjectId.isValid)
-              .map((id) => new ObjectId(id))
-          }
-        });
-      }
-      if (parsed.data.listIds.length) {
-        (recipientFilter.$or as unknown[]).push({
-          listIds: { $in: parsed.data.listIds }
-        });
-      }
+    let campaignId: ObjectId;
+    if (parsed.data.campaignId) {
+      if (!ObjectId.isValid(parsed.data.campaignId)) return error("Invalid campaign id", 422);
+      campaignId = new ObjectId(parsed.data.campaignId);
+    } else {
+      campaignId = await createCampaign({ userId: user._id, data: parsed.data });
     }
 
-    const contacts = await db
-      .collection("contacts")
-      .find(recipientFilter)
-      .limit(1000)
-      .toArray();
-
-    if (!contacts.length) return error("No subscribed recipients selected", 422);
-
-    const now = new Date();
-    const campaignResult = await db.collection("campaigns").insertOne({
-      name: parsed.data.name,
-      templateName: parsed.data.templateName,
-      language: parsed.data.language,
-      parameters: parsed.data.parameters,
-      listIds: parsed.data.listIds,
-      recipients: contacts.map((contact) => ({
-        contactId: contact._id.toString(),
-        name: contact.name,
-        phone: contact.phone,
-        status: "queued"
-      })),
-      status: "sending",
-      acceptedCount: 0,
-      failedCount: 0,
-      createdBy: user._id,
-      createdAt: now
-    });
-
-    const recipients = [];
-    for (const contact of contacts) {
-      const response = await sendTemplate({
-        to: contact.phone,
-        templateName: parsed.data.templateName,
-        language: parsed.data.language,
-        parameters: parsed.data.parameters,
-        parameterOrder: parsed.data.parameterOrder
-      });
-
-      const message = response.result?.messages?.[0];
-      if (message?.id) {
-        await db.collection("whatsapp_messages").updateOne(
-          { messageId: message.id },
-          {
-            $setOnInsert: {
-              messageId: message.id,
-              direction: "outbound",
-              from: process.env.WHATSAPP_PHONE_NUMBER_ID,
-              to: contact.phone,
-              contactName: contact.name,
-              type: "template",
-              templateName: parsed.data.templateName,
-              text: parsed.data.templateName,
-              payload: {
-                templateName: parsed.data.templateName,
-                language: parsed.data.language,
-                parameters: parsed.data.parameters
-              },
-              campaignId: campaignResult.insertedId.toString(),
-              createdAt: new Date()
-            },
-            $set: {
-              lastStatus: message.message_status || "accepted",
-              updatedAt: new Date()
-            }
-          },
-          { upsert: true }
-        );
-      }
-      recipients.push({
-        contactId: contact._id.toString(),
-        name: contact.name,
-        phone: contact.phone,
-        status: response.ok ? "accepted" : "failed",
-        messageId: message?.id,
-        error: response.ok
-          ? undefined
-          : response.result?.error?.message || JSON.stringify(response.result)
-      });
-    }
-
-    const acceptedCount = recipients.filter((recipient) => recipient.status === "accepted").length;
-    const failedCount = recipients.length - acceptedCount;
-
-    await db.collection("campaigns").updateOne(
-      { _id: campaignResult.insertedId },
-      {
-        $set: {
-          recipients,
-          acceptedCount,
-          failedCount,
-          status:
-            failedCount === 0 ? "sent" : acceptedCount > 0 ? "partial" : "failed",
-          sentAt: new Date()
-        }
-      }
-    );
-
-    return json({
-      _id: campaignResult.insertedId.toString(),
-      acceptedCount,
-      failedCount,
-      recipients
-    });
+    const result = await processCampaignBatch({ campaignId, data: parsed.data });
+    return json(result);
   } catch (err) {
     return handleRouteError(err);
   }

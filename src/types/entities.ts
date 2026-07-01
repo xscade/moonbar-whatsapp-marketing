@@ -32,6 +32,8 @@ export type ContactList = {
   updatedAt?: string;
 };
 
+export type ContactTemplateField = "name";
+
 export type TemplateParameter = {
   name: string;
   example?: string;
@@ -45,6 +47,8 @@ export type MessageTemplate = {
   category?: string;
   status?: string;
   body?: string;
+  headerFormat?: "TEXT" | "IMAGE" | "VIDEO" | "DOCUMENT" | "LOCATION";
+  headerMediaUrl?: string;
   parameterFormat: "NAMED" | "POSITIONAL";
   parameters: TemplateParameter[];
   createdAt: string;
@@ -58,6 +62,8 @@ export type CampaignRecipient = {
   status: "queued" | "accepted" | "failed";
   messageId?: string;
   error?: string;
+  lastStatus?: string;
+  errors?: unknown;
 };
 
 export type Campaign = {
@@ -66,6 +72,9 @@ export type Campaign = {
   templateName: string;
   language: string;
   parameters: Record<string, string>;
+  parameterOrder?: string[];
+  contactFieldMappings?: Record<string, ContactTemplateField>;
+  headerImageId?: string;
   listIds: string[];
   recipients: CampaignRecipient[];
   status: "draft" | "sending" | "sent" | "partial" | "failed";
