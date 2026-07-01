@@ -172,6 +172,53 @@ function csvToArray(value: string) {
     });
 }
 
+type CampaignDeliveryStats = {
+  submitted: number;
+  delivered: number;
+  read: number;
+  failed: number;
+  queued: number;
+};
+
+// Reconstructs the real WhatsApp delivery funnel from per-recipient webhook
+// statuses (recipient.lastStatus is set by processStatuses). "submitted" is the
+// count WhatsApp accepted for sending; "delivered"/"read" come from delivery
+// receipts and line up with Meta's WhatsApp Manager numbers.
+function getCampaignDeliveryStats(campaign: Campaign): CampaignDeliveryStats {
+  const stats: CampaignDeliveryStats = {
+    submitted: 0,
+    delivered: 0,
+    read: 0,
+    failed: 0,
+    queued: 0
+  };
+
+  for (const recipient of campaign.recipients ?? []) {
+    const last = recipient.lastStatus;
+
+    if (recipient.status === "failed" || last === "failed") {
+      stats.failed += 1;
+      continue;
+    }
+    if (recipient.status === "queued") {
+      stats.queued += 1;
+      continue;
+    }
+    if (recipient.status === "accepted") {
+      stats.submitted += 1;
+      if (last === "read") {
+        stats.read += 1;
+        stats.delivered += 1;
+      } else if (last === "delivered") {
+        stats.delivered += 1;
+      }
+    }
+    // "canceled" recipients were never sent and are intentionally excluded.
+  }
+
+  return stats;
+}
+
 export function DashboardClient({ user }: DashboardClientProps) {
   const [activeTab, setActiveTab] = useState<TabKey>("overview");
   const [contacts, setContacts] = useState<Contact[]>([]);
@@ -239,14 +286,19 @@ export function DashboardClient({ user }: DashboardClientProps) {
   }, [contacts, lists, selectedContactIds, selectedListIds]);
 
   const stats = useMemo(() => {
-    const accepted = campaigns.reduce((sum, campaign) => sum + campaign.acceptedCount, 0);
-    const failed = campaigns.reduce((sum, campaign) => sum + campaign.failedCount, 0);
+    let delivered = 0;
+    let failed = 0;
+    for (const campaign of campaigns) {
+      const campaignStats = getCampaignDeliveryStats(campaign);
+      delivered += campaignStats.delivered;
+      failed += campaignStats.failed;
+    }
     return {
       contacts: contactTotal,
       lists: lists.length,
       templates: templates.length || 1,
       campaigns: campaigns.length,
-      accepted,
+      delivered,
       failed
     };
   }, [campaigns, contactTotal, lists.length, templates.length]);
@@ -578,6 +630,36 @@ export function DashboardClient({ user }: DashboardClientProps) {
     }
   }
 
+  async function cancelCampaign(campaign: Campaign) {
+    const queuedCount = campaign.recipients.filter(
+      (recipient) => recipient.status === "queued"
+    ).length;
+    if (!queuedCount) {
+      setNotice("This campaign has no queued recipients left to cancel");
+      return;
+    }
+
+    setBusy(`cancel-${campaign._id}`);
+    try {
+      const result = await api<{
+        acceptedCount: number;
+        failedCount: number;
+        canceledCount: number;
+      }>(`/api/campaigns/${campaign._id}/cancel`, {
+        method: "POST",
+        body: "{}"
+      });
+      await refreshAll();
+      setNotice(
+        `Campaign canceled: ${result.acceptedCount} accepted, ${result.canceledCount} unsent`
+      );
+    } catch (err) {
+      setNotice(err instanceof Error ? err.message : "Could not cancel campaign");
+    } finally {
+      setBusy("");
+    }
+  }
+
   async function resumeCampaign(campaign: Campaign) {
     const queuedCount = campaign.recipients.filter(
       (recipient) => recipient.status === "queued"
@@ -833,6 +915,7 @@ export function DashboardClient({ user }: DashboardClientProps) {
               onSync={syncTemplates}
               onRefresh={refreshAll}
               onResume={resumeCampaign}
+              onCancel={cancelCampaign}
             />
           ) : null}
 
@@ -921,7 +1004,12 @@ export function DashboardClient({ user }: DashboardClientProps) {
           ) : null}
 
           {activeTab === "reports" ? (
-            <Reports campaigns={campaigns} busy={busy} onResume={resumeCampaign} />
+            <Reports
+              campaigns={campaigns}
+              busy={busy}
+              onResume={resumeCampaign}
+              onCancel={cancelCampaign}
+            />
           ) : null}
 
           {activeTab === "settings" ? (
@@ -964,7 +1052,8 @@ function Overview({
   busy,
   onSync,
   onRefresh,
-  onResume
+  onResume,
+  onCancel
 }: {
   stats: Record<string, number>;
   campaigns: Campaign[];
@@ -973,12 +1062,13 @@ function Overview({
   onSync: () => void;
   onRefresh: () => void;
   onResume: (campaign: Campaign) => void;
+  onCancel: (campaign: Campaign) => void;
 }) {
   const statCards = [
     { label: "Contacts", value: stats.contacts, icon: UsersRound, color: "#414C2F" },
     { label: "Lists", value: stats.lists, icon: ClipboardList, color: "#7F6F34" },
     { label: "Templates", value: stats.templates, icon: MessageSquareText, color: "#BB5524" },
-    { label: "Accepted", value: stats.accepted, icon: CheckCircle2, color: "#BA401D" }
+    { label: "Delivered", value: stats.delivered, icon: CheckCircle2, color: "#BA401D" }
   ];
 
   return (
@@ -1017,6 +1107,7 @@ function Overview({
             campaigns={campaigns.slice(0, 6)}
             busy={busy}
             onResume={onResume}
+            onCancel={onCancel}
           />
         </Section>
 
@@ -1846,15 +1937,30 @@ function Templates({
 function Reports({
   campaigns,
   busy,
-  onResume
+  onResume,
+  onCancel
 }: {
   campaigns: Campaign[];
   busy: string;
   onResume: (campaign: Campaign) => void;
+  onCancel: (campaign: Campaign) => void;
 }) {
   return (
     <Section title="Campaign History">
-      <CampaignTable campaigns={campaigns} busy={busy} onResume={onResume} />
+      <p className="mb-3 text-xs text-moon-ink/55">
+        <strong className="text-moon-ink/70">Sent</strong> is how many messages WhatsApp
+        accepted for sending. <strong className="text-moon-ink/70">Delivered</strong> and{" "}
+        <strong className="text-moon-ink/70">Read</strong> come from WhatsApp delivery
+        receipts and match the numbers in Meta&apos;s WhatsApp Manager. Marketing messages
+        are often accepted but not delivered (frequency caps, invalid numbers, blocks), so
+        Delivered is usually lower than Sent.
+      </p>
+      <CampaignTable
+        campaigns={campaigns}
+        busy={busy}
+        onResume={onResume}
+        onCancel={onCancel}
+      />
     </Section>
   );
 }
@@ -1862,11 +1968,13 @@ function Reports({
 function CampaignTable({
   campaigns,
   busy,
-  onResume
+  onResume,
+  onCancel
 }: {
   campaigns: Campaign[];
   busy: string;
   onResume: (campaign: Campaign) => void;
+  onCancel: (campaign: Campaign) => void;
 }) {
   return (
     <div className="overflow-auto rounded-lg border border-moon-green/12 moon-scrollbar">
@@ -1875,20 +1983,38 @@ function CampaignTable({
           <tr>
             <th className="px-3 py-3 font-medium">Campaign</th>
             <th className="px-3 py-3 font-medium">Template</th>
-            <th className="px-3 py-3 font-medium">Accepted</th>
+            <th
+              className="px-3 py-3 font-medium"
+              title="Messages WhatsApp accepted for sending. This is a request acknowledgement, not a delivery confirmation."
+            >
+              Sent
+            </th>
+            <th
+              className="px-3 py-3 font-medium"
+              title="Delivered to the recipient's phone. Matches Meta's 'Messages delivered'."
+            >
+              Delivered
+            </th>
+            <th className="px-3 py-3 font-medium" title="Recipients who read the message.">
+              Read
+            </th>
             <th className="px-3 py-3 font-medium">Failed</th>
             <th className="px-3 py-3 font-medium">Queued</th>
-            <th className="px-3 py-3 font-medium">Sent</th>
+            <th className="px-3 py-3 font-medium">When</th>
             <th className="px-3 py-3 font-medium">Action</th>
           </tr>
         </thead>
         <tbody>
           {campaigns.map((campaign) => {
-            const queuedCount = campaign.recipients.filter(
-              (recipient) => recipient.status === "queued"
-            ).length;
-            const canResume = queuedCount > 0;
+            const delivery = getCampaignDeliveryStats(campaign);
+            const queuedCount = delivery.queued;
+            const canResume =
+              queuedCount > 0 &&
+              campaign.status !== "canceled" &&
+              !campaign.cancelRequested;
+            const canCancel = queuedCount > 0 && campaign.status !== "canceled";
             const isResuming = busy === `resume-${campaign._id}`;
+            const isCanceling = busy === `cancel-${campaign._id}`;
 
             return (
               <tr
@@ -1899,15 +2025,20 @@ function CampaignTable({
               >
                 <td className="px-3 py-3 font-medium text-moon-ink">
                   <span>{campaign.name}</span>
-                  {canResume ? (
+                  {queuedCount > 0 ? (
                     <span className="mt-1 block rounded-md bg-moon-red px-2 py-1 text-xs font-semibold text-white">
-                      Interrupted - {queuedCount} queued
+                      {campaign.status === "canceled" ? "Canceled" : "Interrupted"} -{" "}
+                      {queuedCount} queued
                     </span>
                   ) : null}
                 </td>
                 <td className="px-3 py-3 text-moon-ink/65">{campaign.templateName}</td>
-                <td className="px-3 py-3 text-moon-green">{campaign.acceptedCount}</td>
-                <td className="px-3 py-3 text-moon-red">{campaign.failedCount}</td>
+                <td className="px-3 py-3 text-moon-ink/80">{delivery.submitted}</td>
+                <td className="px-3 py-3 font-medium text-moon-green">
+                  {delivery.delivered}
+                </td>
+                <td className="px-3 py-3 text-moon-ink/65">{delivery.read}</td>
+                <td className="px-3 py-3 text-moon-red">{delivery.failed}</td>
                 <td className="px-3 py-3 font-medium text-moon-ink">{queuedCount}</td>
                 <td className="px-3 py-3 text-moon-ink/65">
                   {campaign.sentAt
@@ -1915,20 +2046,37 @@ function CampaignTable({
                     : campaign.status}
                 </td>
                 <td className="px-3 py-3">
-                  {canResume ? (
-                    <button
-                      type="button"
-                      onClick={() => onResume(campaign)}
-                      disabled={isResuming || busy === "send"}
-                      className="primary-button whitespace-nowrap px-3 py-2 text-xs"
-                    >
-                      {isResuming ? (
-                        <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                      ) : (
-                        <RefreshCw className="h-3.5 w-3.5" />
-                      )}
-                      Resume queued
-                    </button>
+                  {canResume || canCancel ? (
+                    <div className="flex flex-wrap gap-2">
+                      {canResume ? (
+                        <button
+                          type="button"
+                          onClick={() => onResume(campaign)}
+                          disabled={isResuming || isCanceling || busy === "send"}
+                          className="primary-button whitespace-nowrap px-3 py-2 text-xs"
+                        >
+                          {isResuming ? (
+                            <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                          ) : (
+                            <RefreshCw className="h-3.5 w-3.5" />
+                          )}
+                          Resume
+                        </button>
+                      ) : null}
+                      <button
+                        type="button"
+                        onClick={() => onCancel(campaign)}
+                        disabled={isResuming || isCanceling}
+                        className="secondary-button whitespace-nowrap border-moon-red/30 px-3 py-2 text-xs text-moon-red hover:bg-moon-red/10"
+                      >
+                        {isCanceling ? (
+                          <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                        ) : (
+                          <X className="h-3.5 w-3.5" />
+                        )}
+                        Cancel
+                      </button>
+                    </div>
                   ) : (
                     <span className="text-xs text-moon-ink/45">Done</span>
                   )}

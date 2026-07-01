@@ -455,14 +455,63 @@ async function processCampaignBatch({
 
   const acceptedCount = recipients.filter((recipient) => recipient.status === "accepted").length;
   const failedCount = recipients.filter((recipient) => recipient.status === "failed").length;
-  const queuedCount = recipients.filter((recipient) => recipient.status === "queued").length;
-  const status = queuedCount > 0
+  let queuedCount = recipients.filter((recipient) => recipient.status === "queued").length;
+  let status = queuedCount > 0
     ? "sending"
     : failedCount === 0
       ? "sent"
       : acceptedCount > 0
         ? "partial"
         : "failed";
+  let canceledCount = recipients.filter((recipient) => recipient.status === "canceled").length;
+
+  const latestCampaign = await db.collection("campaigns").findOne(
+    { _id: campaignId },
+    { projection: { cancelRequested: 1, canceledAt: 1 } }
+  );
+
+  if (latestCampaign?.cancelRequested) {
+    const now = new Date();
+    for (let index = 0; index < recipients.length; index += 1) {
+      if (recipients[index].status === "queued") {
+        recipients[index] = {
+          ...recipients[index],
+          status: "canceled",
+          error: "Campaign canceled before this recipient was sent"
+        };
+      }
+    }
+    queuedCount = 0;
+    canceledCount = recipients.filter((recipient) => recipient.status === "canceled").length;
+    status = "canceled";
+    await db.collection("campaigns").updateOne(
+      { _id: campaignId },
+      {
+        $set: {
+          recipients,
+          acceptedCount,
+          failedCount,
+          status,
+          canceledAt: latestCampaign.canceledAt || now,
+          updatedAt: now
+        }
+      }
+    );
+
+    return {
+      campaignId: campaignId.toString(),
+      total,
+      sent: acceptedCount + failedCount,
+      acceptedCount,
+      failedCount,
+      canceledCount,
+      queuedCount,
+      done: true,
+      canceled: true,
+      status,
+      current
+    };
+  }
 
   await db.collection("campaigns").updateOne(
     { _id: campaignId },
