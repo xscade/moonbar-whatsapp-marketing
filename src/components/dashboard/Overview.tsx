@@ -23,6 +23,13 @@ import {
 import type { Campaign, MessageTemplate } from "@/types/entities";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue
+} from "@/components/ui/select";
 import { staggerContainer } from "@/lib/motion";
 import { CampaignTable } from "./CampaignTable";
 import { Section } from "./Section";
@@ -55,6 +62,22 @@ function ChartTooltip({
   );
 }
 
+function formatCampaignTime(value?: string) {
+  if (!value) return "";
+  return new Date(value).toLocaleString(undefined, {
+    month: "short",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit"
+  });
+}
+
+function formatCampaignLabel(campaign: Campaign, index: number) {
+  const name = campaign.name || campaign.templateName || `Campaign ${index + 1}`;
+  const sentAt = formatCampaignTime(campaign.sentAt || campaign.createdAt);
+  return sentAt ? `${name} - ${sentAt}` : name;
+}
+
 export function Overview({
   stats,
   campaigns,
@@ -74,20 +97,41 @@ export function Overview({
   onResume: (campaign: Campaign) => void;
   onCancel: (campaign: Campaign) => void;
 }) {
+  const [selectedCampaignId, setSelectedCampaignId] = React.useState("all");
+
+  React.useEffect(() => {
+    if (
+      selectedCampaignId !== "all" &&
+      !campaigns.some((campaign) => campaign._id === selectedCampaignId)
+    ) {
+      setSelectedCampaignId("all");
+    }
+  }, [campaigns, selectedCampaignId]);
+
+  const chartCampaigns = React.useMemo(() => {
+    if (selectedCampaignId === "all") return campaigns.slice(0, 9).reverse();
+    const selectedCampaign = campaigns.find(
+      (campaign) => campaign._id === selectedCampaignId
+    );
+    return selectedCampaign ? [selectedCampaign] : [];
+  }, [campaigns, selectedCampaignId]);
+
   const chartData = React.useMemo(
     () =>
-      campaigns
-        .slice(0, 9)
-        .reverse()
-        .map((campaign, index) => {
-          const delivery = getCampaignDeliveryStats(campaign);
-          return {
-            name: campaign.name ? campaign.name.slice(0, 14) : `#${index + 1}`,
-            Sent: delivery.submitted,
-            Delivered: delivery.delivered
-          };
-        }),
-    [campaigns]
+      chartCampaigns.map((campaign, index) => {
+        const delivery = getCampaignDeliveryStats(campaign);
+        return {
+          name:
+            selectedCampaignId === "all"
+              ? campaign.name
+                ? campaign.name.slice(0, 14)
+                : `#${index + 1}`
+              : formatCampaignLabel(campaign, index).slice(0, 24),
+          Sent: delivery.submitted,
+          Delivered: delivery.delivered
+        };
+      }),
+    [chartCampaigns, selectedCampaignId]
   );
 
   const statCards = [
@@ -124,7 +168,32 @@ export function Overview({
       <div className="grid gap-6 xl:grid-cols-[1.55fr_1fr]">
         <Section
           title="Delivery trend"
-          description="Sent vs delivered across recent campaigns"
+          description={
+            selectedCampaignId === "all"
+              ? "Sent vs delivered across recent campaigns"
+              : "Sent vs delivered for the selected campaign"
+          }
+          action={
+            <Select
+              value={selectedCampaignId}
+              onValueChange={setSelectedCampaignId}
+            >
+              <SelectTrigger
+                className="h-9 w-[15rem]"
+                aria-label="Select campaign for delivery trend"
+              >
+                <SelectValue placeholder="All recent campaigns" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">All recent campaigns</SelectItem>
+                {campaigns.slice(0, 25).map((campaign) => (
+                  <SelectItem key={campaign._id} value={campaign._id}>
+                    {formatCampaignLabel(campaign, 0)}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          }
         >
           {chartData.length ? (
             <div className="h-[260px] w-full">
@@ -167,6 +236,8 @@ export function Overview({
                     stroke="hsl(var(--chart-3))"
                     strokeWidth={2}
                     fill="url(#fillSent)"
+                    dot={{ r: 3 }}
+                    activeDot={{ r: 5 }}
                   />
                   <Area
                     type="monotone"
@@ -174,6 +245,8 @@ export function Overview({
                     stroke="hsl(var(--chart-2))"
                     strokeWidth={2.5}
                     fill="url(#fillDelivered)"
+                    dot={{ r: 3 }}
+                    activeDot={{ r: 5 }}
                   />
                 </AreaChart>
               </ResponsiveContainer>
