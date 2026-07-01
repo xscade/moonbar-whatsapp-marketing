@@ -11,7 +11,9 @@ import {
   Code2,
   Inbox as InboxIcon,
   Loader2,
+  Maximize2,
   MessageSquareText,
+  Minimize2,
   Plus,
   RefreshCw,
   Search,
@@ -266,7 +268,9 @@ export function Inbox({
   const [draft, setDraft] = useState("");
   const [developerOpen, setDeveloperOpen] = useState(false);
   const [templateOpen, setTemplateOpen] = useState(false);
+  const [fullscreen, setFullscreen] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const messagesScrollRef = useRef<HTMLDivElement>(null);
 
   const conversations = useMemo(() => {
     const contactByPhone = new Map<string, Contact>();
@@ -382,12 +386,28 @@ export function Inbox({
     : false;
 
   useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+    const container = messagesScrollRef.current;
+    if (!container) return;
+    container.scrollTop = container.scrollHeight;
   }, [
     activeConversation?.phone,
     activeConversation?.messages.length,
     activeConversation?.messages.at(-1)?._id
   ]);
+
+  useEffect(() => {
+    if (!fullscreen) return;
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setFullscreen(false);
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => {
+      document.body.style.overflow = previousOverflow;
+      window.removeEventListener("keydown", onKeyDown);
+    };
+  }, [fullscreen]);
 
   async function handleSend(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -402,341 +422,403 @@ export function Inbox({
     if (sent) setDraft("");
   }
 
+  const chatUi = (
+    <div
+      className={cn(
+        "relative overflow-hidden bg-[#F4EEE3]",
+        fullscreen
+          ? "flex h-full min-h-0 flex-col"
+          : "h-[720px] rounded-xl border border-moon-green/12 shadow-sm"
+      )}
+    >
+      <div
+        className={cn(
+          "grid h-full min-h-0 overflow-hidden",
+          fullscreen
+            ? "lg:grid-cols-[400px_minmax(0,1fr)]"
+            : "lg:grid-cols-[360px_minmax(0,1fr)]"
+        )}
+      >
+        <aside
+          className={cn(
+            "flex h-full min-h-0 flex-col overflow-hidden border-b border-moon-green/12 bg-[#F7F3EA] lg:border-b-0 lg:border-r",
+            fullscreen && "bg-white"
+          )}
+        >
+          <div className="shrink-0 border-b border-moon-green/10 p-4">
+            <div className="flex items-center justify-between gap-3">
+              <div>
+                <h3 className="font-semibold text-moon-ink">Chats</h3>
+                <p className="text-sm text-muted-foreground">
+                  {conversations.length.toLocaleString()} conversations
+                </p>
+              </div>
+              <Button
+                variant="outline"
+                size="icon"
+                onClick={onRefresh}
+                disabled={busy === "messages"}
+                title="Refresh"
+              >
+                <RefreshCw className={busy === "messages" ? "animate-spin" : ""} />
+              </Button>
+            </div>
+            <div className="relative mt-4">
+              <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-moon-ink/40" />
+              <Input
+                value={search}
+                onChange={(event) => setSearch(event.target.value)}
+                placeholder="Search chats or contacts"
+                className="h-11 rounded-full bg-white pl-9"
+              />
+            </div>
+          </div>
+
+          <div className="min-h-0 flex-1 overflow-y-auto moon-scrollbar">
+            {visibleConversations.map((conversation) => {
+              const active = conversation.phone === activeConversation?.phone;
+              const latest = conversation.latest;
+              const open = isSessionOpen(conversation);
+              return (
+                <button
+                  key={conversation.phone}
+                  type="button"
+                  onClick={() => setActivePhone(conversation.phone)}
+                  className={cn(
+                    "flex w-full items-center gap-3 border-b border-moon-green/8 px-4 py-3 text-left transition-colors hover:bg-white/70",
+                    active ? "bg-white" : "bg-transparent",
+                    fullscreen && active && "bg-[#F0F2F5]"
+                  )}
+                >
+                  <Avatar className="h-11 w-11">
+                    <AvatarFallback>{getInitials(conversation.name)}</AvatarFallback>
+                  </Avatar>
+                  <span className="min-w-0 flex-1">
+                    <span className="flex items-center justify-between gap-2">
+                      <span className="flex min-w-0 items-center gap-2">
+                        <span className="truncate font-semibold text-moon-ink">
+                          {conversation.name}
+                        </span>
+                        {open ? (
+                          <Badge variant="success" className="shrink-0 px-1.5 py-0 text-[10px]">
+                            24h
+                          </Badge>
+                        ) : null}
+                      </span>
+                      <span className="shrink-0 text-xs text-muted-foreground">
+                        {latest ? timeAgo(latest.createdAt) : ""}
+                      </span>
+                    </span>
+                    <span className="mt-1 flex items-center gap-1 text-sm text-muted-foreground">
+                      {latest?.direction === "outbound" ? (
+                        <StatusGlyph status={latest.lastStatus} className="shrink-0" />
+                      ) : null}
+                      <span className="truncate">{messageText(latest)}</span>
+                    </span>
+                  </span>
+                </button>
+              );
+            })}
+            {!visibleConversations.length ? (
+              <div className="grid place-items-center p-10 text-center text-sm text-muted-foreground">
+                <InboxIcon className="mb-3 h-7 w-7 text-moon-green/40" />
+                No chats found
+              </div>
+            ) : null}
+          </div>
+        </aside>
+
+        <section className="flex h-full min-h-0 flex-col overflow-hidden bg-[#EFE7DA]">
+          {activeConversation ? (
+            <>
+              <div
+                className={cn(
+                  "flex shrink-0 items-center justify-between gap-3 border-b border-moon-green/12 bg-[#F7F3EA] px-4 py-3",
+                  fullscreen && "bg-[#F0F2F5]"
+                )}
+              >
+                <div className="flex min-w-0 items-center gap-3">
+                  <Avatar className="h-10 w-10">
+                    <AvatarFallback>
+                      {getInitials(activeConversation.name)}
+                    </AvatarFallback>
+                  </Avatar>
+                  <div className="min-w-0">
+                    <h3 className="truncate font-semibold text-moon-ink">
+                      {activeConversation.name}
+                    </h3>
+                    <p className="truncate text-sm text-muted-foreground">
+                      +{activeConversation.phone}
+                    </p>
+                    {sessionOpen && sessionExpiry ? (
+                      <p className="truncate text-xs text-moon-green">
+                        Reply window open · closes{" "}
+                        {formatDistanceToNow(sessionExpiry, { addSuffix: true })}
+                      </p>
+                    ) : lastInboundMessage(activeConversation) ? (
+                      <p className="truncate text-xs text-moon-red/80">
+                        Reply window closed · send an approved template
+                      </p>
+                    ) : (
+                      <p className="truncate text-xs text-muted-foreground">
+                        No inbound messages yet · start with a template
+                      </p>
+                    )}
+                  </div>
+                </div>
+                <div className="flex items-center gap-2">
+                  <Badge variant="muted">
+                    {activeConversation.messages.length} messages
+                  </Badge>
+                  <Button
+                    variant="outline"
+                    size="icon"
+                    onClick={() => setDeveloperOpen(true)}
+                    title="Developer events"
+                  >
+                    <Code2 />
+                  </Button>
+                </div>
+              </div>
+
+              <div
+                ref={messagesScrollRef}
+                className="min-h-0 flex-1 overflow-y-auto moon-scrollbar"
+              >
+                <div className="space-y-3 bg-[radial-gradient(circle_at_1px_1px,rgba(65,76,47,0.10)_1px,transparent_0)] bg-[length:22px_22px] p-5">
+                  {activeConversation.messages.map((message) => (
+                    <MessageBubble key={message._id} message={message} />
+                  ))}
+                  <div ref={messagesEndRef} />
+                  {!activeConversation.messages.length ? (
+                    <div className="flex min-h-[320px] items-center justify-center text-center text-sm text-muted-foreground">
+                      <div>
+                        <MessageSquareText className="mx-auto mb-3 h-8 w-8 text-moon-green/45" />
+                        No messages with this contact yet
+                      </div>
+                    </div>
+                  ) : null}
+                </div>
+              </div>
+
+              <form
+                onSubmit={handleSend}
+                className={cn(
+                  "flex shrink-0 items-end gap-2 border-t border-moon-green/12 bg-[#F7F3EA] p-3",
+                  fullscreen && "bg-[#F0F2F5]"
+                )}
+              >
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="icon"
+                  className="h-11 w-11 shrink-0 rounded-full bg-white"
+                  onClick={() => setTemplateOpen(true)}
+                  disabled={sending}
+                  title="Send approved template"
+                >
+                  <Plus />
+                </Button>
+                <Textarea
+                  value={draft}
+                  onChange={(event) => setDraft(event.target.value)}
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter" && !event.shiftKey) {
+                      event.preventDefault();
+                      event.currentTarget.form?.requestSubmit();
+                    }
+                  }}
+                  placeholder={
+                    sessionOpen
+                      ? "Message"
+                      : "24-hour window closed — use + to send a template"
+                  }
+                  className="min-h-11 resize-none rounded-2xl bg-white"
+                  disabled={sending || !sessionOpen}
+                />
+                <Button
+                  type="submit"
+                  size="icon"
+                  className="h-11 w-11 shrink-0 rounded-full"
+                  disabled={!draft.trim() || sending || !sessionOpen}
+                  title="Send message"
+                >
+                  {sending ? <Loader2 className="animate-spin" /> : <Send />}
+                </Button>
+              </form>
+
+              <InboxTemplateDialog
+                open={templateOpen}
+                onOpenChange={setTemplateOpen}
+                templates={templates}
+                phone={activeConversation.phone}
+                contactName={activeConversation.name}
+                sending={sending}
+                onSend={onSendTemplate}
+              />
+            </>
+          ) : (
+            <div className="grid flex-1 place-items-center p-8 text-center text-sm text-muted-foreground">
+              <div>
+                <InboxIcon className="mx-auto mb-3 h-8 w-8 text-moon-green/45" />
+                Select a contact to chat
+              </div>
+            </div>
+          )}
+        </section>
+      </div>
+
+      <div
+        className={cn(
+          "absolute inset-y-0 right-0 z-20 w-full max-w-[480px] border-l border-moon-green/12 bg-[#F7F3EA] shadow-2xl transition-transform duration-300",
+          developerOpen ? "translate-x-0" : "translate-x-full"
+        )}
+      >
+        <div className="flex items-center justify-between border-b border-moon-green/10 p-4">
+          <div>
+            <h3 className="font-semibold text-moon-ink">Developer events</h3>
+            <p className="text-sm text-muted-foreground">
+              Delivery receipts and webhook payloads
+            </p>
+          </div>
+          <Button
+            variant="ghost"
+            size="icon"
+            onClick={() => setDeveloperOpen(false)}
+            title="Close"
+          >
+            <X />
+          </Button>
+        </div>
+
+        <Tabs defaultValue="delivery" className="p-4">
+          <TabsList className="w-full">
+            <TabsTrigger value="delivery" className="flex-1">
+              Delivery ({statuses.length})
+            </TabsTrigger>
+            <TabsTrigger value="webhooks" className="flex-1">
+              Webhooks ({events.length})
+            </TabsTrigger>
+          </TabsList>
+
+          <TabsContent value="delivery">
+            <div className="mt-3 overflow-hidden rounded-lg border border-moon-green/12 bg-white">
+              <ScrollArea className={cn(fullscreen ? "h-[calc(100vh-12rem)]" : "h-[600px]")}>
+                {statuses.map((status) => (
+                  <div
+                    key={status._id}
+                    className="flex items-center justify-between gap-3 border-b border-moon-green/8 px-3 py-3 text-sm last:border-0"
+                  >
+                    <div className="min-w-0">
+                      <Badge
+                        variant={statusTone[status.status] || "muted"}
+                        className="capitalize"
+                      >
+                        <StatusGlyph status={status.status} />
+                        {status.status}
+                      </Badge>
+                      <p className="mt-1 truncate text-xs text-muted-foreground">
+                        {status.messageId}
+                      </p>
+                    </div>
+                    <span className="shrink-0 text-xs text-muted-foreground">
+                      {timeAgo(status.createdAt)}
+                    </span>
+                  </div>
+                ))}
+                {!statuses.length ? (
+                  <p className="p-4 text-sm text-muted-foreground">
+                    No delivery events yet
+                  </p>
+                ) : null}
+              </ScrollArea>
+            </div>
+          </TabsContent>
+
+          <TabsContent value="webhooks">
+            <div className="mt-3 rounded-lg bg-moon-ink p-3">
+              <ScrollArea className={cn(fullscreen ? "h-[calc(100vh-12rem)]" : "h-[600px]")}>
+                {events.map((event) => (
+                  <details
+                    key={event._id}
+                    className="border-b border-white/10 py-2 last:border-0"
+                  >
+                    <summary className="cursor-pointer text-xs font-medium text-moon-cream">
+                      {event.object || "event"} · {timeAgo(event.createdAt)}
+                    </summary>
+                    <pre className="mt-2 whitespace-pre-wrap break-words text-[11px] leading-5 text-moon-cream/70">
+                      {JSON.stringify(event.payload, null, 2)}
+                    </pre>
+                  </details>
+                ))}
+                {!events.length ? (
+                  <p className="p-2 text-sm text-moon-cream/70">
+                    No webhook calls stored yet
+                  </p>
+                ) : null}
+              </ScrollArea>
+            </div>
+          </TabsContent>
+        </Tabs>
+      </div>
+
+      {developerOpen ? (
+        <button
+          type="button"
+          aria-label="Close developer events"
+          className="absolute inset-0 z-10 bg-moon-ink/20 lg:hidden"
+          onClick={() => setDeveloperOpen(false)}
+        />
+      ) : null}
+    </div>
+  );
+
   return (
     <motion.div
       variants={staggerContainer}
       initial="hidden"
       animate="show"
     >
-      <Section
-        title="WhatsApp Inbox"
-        description="Live customer conversations"
-      >
-        <div className="relative overflow-hidden rounded-xl border border-moon-green/12 bg-[#F4EEE3] shadow-sm">
-          <div className="grid min-h-[720px] lg:grid-cols-[360px_minmax(0,1fr)]">
-            <aside className="border-b border-moon-green/12 bg-[#F7F3EA] lg:border-b-0 lg:border-r">
-              <div className="border-b border-moon-green/10 p-4">
-                <div className="flex items-center justify-between gap-3">
-                  <div>
-                    <h3 className="font-semibold text-moon-ink">Chats</h3>
-                    <p className="text-sm text-muted-foreground">
-                      {conversations.length.toLocaleString()} conversations
-                    </p>
-                  </div>
-                  <Button
-                    variant="outline"
-                    size="icon"
-                    onClick={onRefresh}
-                    disabled={busy === "messages"}
-                    title="Refresh"
-                  >
-                    <RefreshCw
-                      className={busy === "messages" ? "animate-spin" : ""}
-                    />
-                  </Button>
-                </div>
-                <div className="relative mt-4">
-                  <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-moon-ink/40" />
-                  <Input
-                    value={search}
-                    onChange={(event) => setSearch(event.target.value)}
-                    placeholder="Search chats or contacts"
-                    className="h-11 rounded-full bg-white pl-9"
-                  />
-                </div>
-              </div>
-
-              <ScrollArea className="h-[610px]">
-                {visibleConversations.map((conversation) => {
-                  const active = conversation.phone === activeConversation?.phone;
-                  const latest = conversation.latest;
-                  const open = isSessionOpen(conversation);
-                  return (
-                    <button
-                      key={conversation.phone}
-                      type="button"
-                      onClick={() => setActivePhone(conversation.phone)}
-                      className={cn(
-                        "flex w-full items-center gap-3 border-b border-moon-green/8 px-4 py-3 text-left transition-colors hover:bg-white/70",
-                        active ? "bg-white" : "bg-transparent"
-                      )}
-                    >
-                      <Avatar className="h-11 w-11">
-                        <AvatarFallback>
-                          {getInitials(conversation.name)}
-                        </AvatarFallback>
-                      </Avatar>
-                      <span className="min-w-0 flex-1">
-                        <span className="flex items-center justify-between gap-2">
-                          <span className="flex min-w-0 items-center gap-2">
-                            <span className="truncate font-semibold text-moon-ink">
-                              {conversation.name}
-                            </span>
-                            {open ? (
-                              <Badge variant="success" className="shrink-0 px-1.5 py-0 text-[10px]">
-                                24h
-                              </Badge>
-                            ) : null}
-                          </span>
-                          <span className="shrink-0 text-xs text-muted-foreground">
-                            {latest ? timeAgo(latest.createdAt) : ""}
-                          </span>
-                        </span>
-                        <span className="mt-1 flex items-center gap-1 text-sm text-muted-foreground">
-                          {latest?.direction === "outbound" ? (
-                            <StatusGlyph
-                              status={latest.lastStatus}
-                              className="shrink-0"
-                            />
-                          ) : null}
-                          <span className="truncate">{messageText(latest)}</span>
-                        </span>
-                      </span>
-                    </button>
-                  );
-                })}
-                {!visibleConversations.length ? (
-                  <div className="grid place-items-center p-10 text-center text-sm text-muted-foreground">
-                    <InboxIcon className="mb-3 h-7 w-7 text-moon-green/40" />
-                    No chats found
-                  </div>
-                ) : null}
-              </ScrollArea>
-            </aside>
-
-            <section className="flex min-h-[720px] min-w-0 flex-col bg-[#EFE7DA]">
-              {activeConversation ? (
-                <>
-                  <div className="flex items-center justify-between gap-3 border-b border-moon-green/12 bg-[#F7F3EA] px-4 py-3">
-                    <div className="flex min-w-0 items-center gap-3">
-                      <Avatar className="h-10 w-10">
-                        <AvatarFallback>
-                          {getInitials(activeConversation.name)}
-                        </AvatarFallback>
-                      </Avatar>
-                      <div className="min-w-0">
-                        <h3 className="truncate font-semibold text-moon-ink">
-                          {activeConversation.name}
-                        </h3>
-                        <p className="truncate text-sm text-muted-foreground">
-                          +{activeConversation.phone}
-                        </p>
-                        {sessionOpen && sessionExpiry ? (
-                          <p className="truncate text-xs text-moon-green">
-                            Reply window open · closes{" "}
-                            {formatDistanceToNow(sessionExpiry, { addSuffix: true })}
-                          </p>
-                        ) : lastInboundMessage(activeConversation) ? (
-                          <p className="truncate text-xs text-moon-red/80">
-                            Reply window closed · send an approved template
-                          </p>
-                        ) : (
-                          <p className="truncate text-xs text-muted-foreground">
-                            No inbound messages yet · start with a template
-                          </p>
-                        )}
-                      </div>
-                    </div>
-                    <div className="flex items-center gap-2">
-                      <Badge variant="muted">
-                        {activeConversation.messages.length} messages
-                      </Badge>
-                      <Button
-                        variant="outline"
-                        size="icon"
-                        onClick={() => setDeveloperOpen(true)}
-                        title="Developer events"
-                      >
-                        <Code2 />
-                      </Button>
-                    </div>
-                  </div>
-
-                  <ScrollArea className="flex-1">
-                    <div className="min-h-[552px] space-y-3 bg-[radial-gradient(circle_at_1px_1px,rgba(65,76,47,0.10)_1px,transparent_0)] bg-[length:22px_22px] p-5">
-                      {activeConversation.messages.map((message) => (
-                        <MessageBubble key={message._id} message={message} />
-                      ))}
-                      <div ref={messagesEndRef} />
-                      {!activeConversation.messages.length ? (
-                        <div className="grid min-h-[480px] place-items-center text-center text-sm text-muted-foreground">
-                          <div>
-                            <MessageSquareText className="mx-auto mb-3 h-8 w-8 text-moon-green/45" />
-                            No messages with this contact yet
-                          </div>
-                        </div>
-                      ) : null}
-                    </div>
-                  </ScrollArea>
-
-                  <form
-                    onSubmit={handleSend}
-                    className="flex items-end gap-2 border-t border-moon-green/12 bg-[#F7F3EA] p-3"
-                  >
-                    <Button
-                      type="button"
-                      variant="outline"
-                      size="icon"
-                      className="h-11 w-11 shrink-0 rounded-full"
-                      onClick={() => setTemplateOpen(true)}
-                      disabled={sending}
-                      title="Send approved template"
-                    >
-                      <Plus />
-                    </Button>
-                    <Textarea
-                      value={draft}
-                      onChange={(event) => setDraft(event.target.value)}
-                      onKeyDown={(event) => {
-                        if (event.key === "Enter" && !event.shiftKey) {
-                          event.preventDefault();
-                          event.currentTarget.form?.requestSubmit();
-                        }
-                      }}
-                      placeholder={
-                        sessionOpen
-                          ? "Message"
-                          : "24-hour window closed — use + to send a template"
-                      }
-                      className="min-h-11 resize-none rounded-2xl bg-white"
-                      disabled={sending || !sessionOpen}
-                    />
-                    <Button
-                      type="submit"
-                      size="icon"
-                      className="h-11 w-11 shrink-0 rounded-full"
-                      disabled={!draft.trim() || sending || !sessionOpen}
-                      title="Send message"
-                    >
-                      {sending ? <Loader2 className="animate-spin" /> : <Send />}
-                    </Button>
-                  </form>
-
-                  <InboxTemplateDialog
-                    open={templateOpen}
-                    onOpenChange={setTemplateOpen}
-                    templates={templates}
-                    phone={activeConversation.phone}
-                    contactName={activeConversation.name}
-                    sending={sending}
-                    onSend={onSendTemplate}
-                  />
-                </>
-              ) : (
-                <div className="grid flex-1 place-items-center p-8 text-center text-sm text-muted-foreground">
-                  <div>
-                    <InboxIcon className="mx-auto mb-3 h-8 w-8 text-moon-green/45" />
-                    Select a contact to chat
-                  </div>
-                </div>
-              )}
-            </section>
-          </div>
-
-          <div
-            className={cn(
-              "absolute inset-y-0 right-0 z-20 w-full max-w-[480px] border-l border-moon-green/12 bg-[#F7F3EA] shadow-2xl transition-transform duration-300",
-              developerOpen ? "translate-x-0" : "translate-x-full"
-            )}
-          >
-            <div className="flex items-center justify-between border-b border-moon-green/10 p-4">
-              <div>
-                <h3 className="font-semibold text-moon-ink">Developer events</h3>
-                <p className="text-sm text-muted-foreground">
-                  Delivery receipts and webhook payloads
-                </p>
-              </div>
-              <Button
-                variant="ghost"
-                size="icon"
-                onClick={() => setDeveloperOpen(false)}
-                title="Close"
-              >
-                <X />
-              </Button>
+      {fullscreen ? (
+        <div className="fixed inset-0 z-[100] flex flex-col bg-[#F0F2F5]">
+          <div className="flex shrink-0 items-center justify-between border-b border-[#D1D7DB] bg-[#F0F2F5] px-4 py-3 sm:px-6">
+            <div>
+              <h2 className="text-base font-semibold text-[#111B21]">WhatsApp Inbox</h2>
+              <p className="text-sm text-[#667781]">Live customer conversations</p>
             </div>
-
-            <Tabs defaultValue="delivery" className="p-4">
-              <TabsList className="w-full">
-                <TabsTrigger value="delivery" className="flex-1">
-                  Delivery ({statuses.length})
-                </TabsTrigger>
-                <TabsTrigger value="webhooks" className="flex-1">
-                  Webhooks ({events.length})
-                </TabsTrigger>
-              </TabsList>
-
-              <TabsContent value="delivery">
-                <div className="mt-3 overflow-hidden rounded-lg border border-moon-green/12 bg-white">
-                  <ScrollArea className="h-[600px]">
-                    {statuses.map((status) => (
-                      <div
-                        key={status._id}
-                        className="flex items-center justify-between gap-3 border-b border-moon-green/8 px-3 py-3 text-sm last:border-0"
-                      >
-                        <div className="min-w-0">
-                          <Badge
-                            variant={statusTone[status.status] || "muted"}
-                            className="capitalize"
-                          >
-                            <StatusGlyph status={status.status} />
-                            {status.status}
-                          </Badge>
-                          <p className="mt-1 truncate text-xs text-muted-foreground">
-                            {status.messageId}
-                          </p>
-                        </div>
-                        <span className="shrink-0 text-xs text-muted-foreground">
-                          {timeAgo(status.createdAt)}
-                        </span>
-                      </div>
-                    ))}
-                    {!statuses.length ? (
-                      <p className="p-4 text-sm text-muted-foreground">
-                        No delivery events yet
-                      </p>
-                    ) : null}
-                  </ScrollArea>
-                </div>
-              </TabsContent>
-
-              <TabsContent value="webhooks">
-                <div className="mt-3 rounded-lg bg-moon-ink p-3">
-                  <ScrollArea className="h-[600px]">
-                    {events.map((event) => (
-                      <details
-                        key={event._id}
-                        className="border-b border-white/10 py-2 last:border-0"
-                      >
-                        <summary className="cursor-pointer text-xs font-medium text-moon-cream">
-                          {event.object || "event"} · {timeAgo(event.createdAt)}
-                        </summary>
-                        <pre className="mt-2 whitespace-pre-wrap break-words text-[11px] leading-5 text-moon-cream/70">
-                          {JSON.stringify(event.payload, null, 2)}
-                        </pre>
-                      </details>
-                    ))}
-                    {!events.length ? (
-                      <p className="p-2 text-sm text-moon-cream/70">
-                        No webhook calls stored yet
-                      </p>
-                    ) : null}
-                  </ScrollArea>
-                </div>
-              </TabsContent>
-            </Tabs>
+            <Button
+              variant="outline"
+              size="icon"
+              className="h-9 w-9 shrink-0 bg-white"
+              onClick={() => setFullscreen(false)}
+              title="Exit full screen"
+              aria-label="Exit full screen"
+            >
+              <Minimize2 />
+            </Button>
           </div>
-
-          {developerOpen ? (
-            <button
-              type="button"
-              aria-label="Close developer events"
-              className="absolute inset-0 z-10 bg-moon-ink/20 lg:hidden"
-              onClick={() => setDeveloperOpen(false)}
-            />
-          ) : null}
+          <div className="min-h-0 flex-1">{chatUi}</div>
         </div>
-      </Section>
+      ) : (
+        <Section
+          title="WhatsApp Inbox"
+          description="Live customer conversations"
+          action={
+            <Button
+              variant="outline"
+              size="icon"
+              className="h-9 w-9"
+              onClick={() => setFullscreen(true)}
+              title="Full screen"
+              aria-label="Full screen"
+            >
+              <Maximize2 />
+            </Button>
+          }
+        >
+          {chatUi}
+        </Section>
+      )}
     </motion.div>
   );
 }
