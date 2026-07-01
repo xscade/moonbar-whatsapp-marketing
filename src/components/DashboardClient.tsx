@@ -1,7 +1,7 @@
 "use client";
 
 import Image from "next/image";
-import { FormEvent, useEffect, useMemo, useState } from "react";
+import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import {
   BarChart3,
   CheckCircle2,
@@ -121,6 +121,7 @@ type CampaignProgress = {
   currentPhone?: string;
   currentStatus?: string;
   error?: string;
+  canceled?: boolean;
 };
 
 type CampaignBatchResult = {
@@ -132,6 +133,8 @@ type CampaignBatchResult = {
   queuedCount: number;
   done: boolean;
   status: string;
+  canceled?: boolean;
+  canceledCount?: number;
   current?: {
     name?: string;
     phone?: string;
@@ -201,6 +204,8 @@ export function DashboardClient({ user }: DashboardClientProps) {
   const [busy, setBusy] = useState("");
   const [notice, setNotice] = useState("");
   const [sendProgress, setSendProgress] = useState<CampaignProgress | null>(null);
+  const [cancelSendRequested, setCancelSendRequested] = useState(false);
+  const cancelSendRequestedRef = useRef(false);
 
   const selectedTemplate =
     templates.find((template) => template.name === selectedTemplateName) ??
@@ -478,6 +483,8 @@ export function DashboardClient({ user }: DashboardClientProps) {
     }
 
     setBusy("send");
+    setCancelSendRequested(false);
+    cancelSendRequestedRef.current = false;
     setSendProgress({
       total: campaignRecipientCount,
       sent: 0,
@@ -491,11 +498,11 @@ export function DashboardClient({ user }: DashboardClientProps) {
         language: selectedTemplate.language,
         parameters: parameterValues,
         parameterOrder: selectedTemplate.parameters.map((parameter) => parameter.name),
-        contactFieldMappings,
-        headerImageId,
-        listIds: Array.from(selectedListIds),
-        contactIds: Array.from(selectedContactIds),
-        batchSize: 25
+          contactFieldMappings,
+          headerImageId,
+          listIds: Array.from(selectedListIds),
+          contactIds: Array.from(selectedContactIds),
+          batchSize: 10
       };
 
       let campaignId = "";
@@ -520,22 +527,54 @@ export function DashboardClient({ user }: DashboardClientProps) {
           currentName: result.current?.name,
           currentPhone: result.current?.phone,
           currentStatus: result.current?.status,
-          error: result.current?.error
+          error: result.current?.error,
+          canceled: result.canceled
         };
         setSendProgress(finalProgress);
 
-        if (result.done) break;
+        if (result.done || result.canceled || cancelSendRequestedRef.current) break;
       }
 
       await refreshAll();
-      setNotice(
-        `${finalProgress?.acceptedCount || 0} accepted, ${finalProgress?.failedCount || 0} failed by WhatsApp`
-      );
+      if (finalProgress?.canceled || cancelSendRequestedRef.current) {
+        setNotice(
+          `Campaign canceled after ${finalProgress?.acceptedCount || 0} accepted by WhatsApp`
+        );
+      } else {
+        setNotice(
+          `${finalProgress?.acceptedCount || 0} accepted, ${finalProgress?.failedCount || 0} failed by WhatsApp`
+        );
+      }
     } catch (err) {
       setNotice(err instanceof Error ? err.message : "Campaign failed");
     } finally {
       setBusy("");
+      setCancelSendRequested(false);
+      cancelSendRequestedRef.current = false;
       setTimeout(() => setSendProgress(null), 3500);
+    }
+  }
+
+  async function cancelCurrentCampaign() {
+    const campaignId = sendProgress?.campaignId;
+    if (!campaignId) {
+      setCancelSendRequested(true);
+      cancelSendRequestedRef.current = true;
+      setNotice("Cancel requested. The campaign will stop after this batch starts.");
+      return;
+    }
+
+    setCancelSendRequested(true);
+    cancelSendRequestedRef.current = true;
+    setNotice("Cancel requested. Stopping remaining queued recipients.");
+    try {
+      await api(`/api/campaigns/${campaignId}/cancel`, {
+        method: "POST",
+        body: "{}"
+      });
+      await refreshAll();
+    } catch (err) {
+      setNotice(err instanceof Error ? err.message : "Could not cancel campaign");
     }
   }
 
@@ -837,12 +876,14 @@ export function DashboardClient({ user }: DashboardClientProps) {
               setSearch={setSearch}
               recipientCount={campaignRecipientCount}
               headerImageId={headerImageId}
-              headerImageName={headerImageName}
-              busy={busy}
-              progress={sendProgress}
-              onUploadHeaderImage={uploadHeaderImage}
-              onSend={sendCampaign}
-            />
+            headerImageName={headerImageName}
+            busy={busy}
+            progress={sendProgress}
+            cancelRequested={cancelSendRequested}
+            onUploadHeaderImage={uploadHeaderImage}
+            onSend={sendCampaign}
+            onCancel={cancelCurrentCampaign}
+          />
           ) : null}
 
           {activeTab === "contacts" ? (
@@ -1041,8 +1082,10 @@ function Campaigns(props: {
   headerImageName: string;
   busy: string;
   progress: CampaignProgress | null;
+  cancelRequested: boolean;
   onUploadHeaderImage: (file: File) => void;
   onSend: () => void;
+  onCancel: () => void;
 }) {
   const percent = props.progress?.total
     ? Math.round((props.progress.sent / props.progress.total) * 100)
@@ -1181,7 +1224,8 @@ function Campaigns(props: {
             <div className="rounded-lg border border-moon-green/12 bg-moon-paper p-3">
               <div className="mb-2 flex flex-wrap items-center justify-between gap-2 text-sm">
                 <span className="font-medium text-moon-ink">
-                  Sending {props.progress.sent} of {props.progress.total}
+                  {props.cancelRequested || props.progress.canceled ? "Canceling" : "Sending"}{" "}
+                  {props.progress.sent} of {props.progress.total}
                 </span>
                 <span className="font-semibold text-moon-red">{percent}%</span>
               </div>
@@ -1212,6 +1256,21 @@ function Campaigns(props: {
                 <p className="mt-2 line-clamp-2 text-xs text-moon-red">
                   {props.progress.error}
                 </p>
+              ) : null}
+              {!props.progress.canceled ? (
+                <button
+                  type="button"
+                  onClick={props.onCancel}
+                  disabled={props.cancelRequested}
+                  className="secondary-button mt-3 justify-center border-moon-red/30 text-moon-red hover:bg-moon-red/10"
+                >
+                  {props.cancelRequested ? (
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                  ) : (
+                    <X className="h-4 w-4" />
+                  )}
+                  {props.cancelRequested ? "Canceling" : "Cancel campaign"}
+                </button>
               ) : null}
             </div>
           ) : null}

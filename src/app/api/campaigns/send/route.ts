@@ -25,7 +25,7 @@ type Recipient = {
   contactId?: string;
   name: string;
   phone: string;
-  status: "queued" | "accepted" | "failed";
+  status: "queued" | "accepted" | "failed" | "canceled";
   messageId?: string;
   error?: string;
   lastStatus?: string;
@@ -251,6 +251,56 @@ async function processCampaignBatch({
     ? ([...campaign.recipients] as Recipient[])
     : [];
   const total = recipients.length;
+
+  if (campaign.cancelRequested) {
+    const now = new Date();
+    const canceledRecipients = recipients.map((recipient) =>
+      recipient.status === "queued"
+        ? {
+            ...recipient,
+            status: "canceled" as const,
+            error: "Campaign canceled before this recipient was sent"
+          }
+        : recipient
+    );
+    const acceptedCount = canceledRecipients.filter(
+      (recipient) => recipient.status === "accepted"
+    ).length;
+    const failedCount = canceledRecipients.filter(
+      (recipient) => recipient.status === "failed"
+    ).length;
+    const canceledCount = canceledRecipients.filter(
+      (recipient) => recipient.status === "canceled"
+    ).length;
+
+    await db.collection("campaigns").updateOne(
+      { _id: campaignId },
+      {
+        $set: {
+          recipients: canceledRecipients,
+          acceptedCount,
+          failedCount,
+          status: "canceled",
+          canceledAt: campaign.canceledAt || now,
+          updatedAt: now
+        }
+      }
+    );
+
+    return {
+      campaignId: campaignId.toString(),
+      total,
+      sent: acceptedCount + failedCount,
+      acceptedCount,
+      failedCount,
+      canceledCount,
+      queuedCount: 0,
+      done: true,
+      canceled: true,
+      status: "canceled"
+    };
+  }
+
   const batchIndexes = recipients
     .map((recipient, index) => ({ recipient, index }))
     .filter(({ recipient }) => recipient.status === "queued")

@@ -59,7 +59,7 @@ export type CampaignRecipient = {
   contactId?: string;
   name: string;
   phone: string;
-  status: "queued" | "accepted" | "failed";
+  status: "queued" | "accepted" | "failed" | "canceled";
   messageId?: string;
   error?: string;
   lastStatus?: string;
@@ -77,7 +77,9 @@ export type Campaign = {
   headerImageId?: string;
   listIds: string[];
   recipients: CampaignRecipient[];
-  status: "draft" | "sending" | "sent" | "partial" | "failed";
+  status: "draft" | "sending" | "sent" | "partial" | "failed" | "canceled";
+  cancelRequested?: boolean;
+  canceledAt?: string;
   acceptedCount: number;
   failedCount: number;
   createdBy?: string;
