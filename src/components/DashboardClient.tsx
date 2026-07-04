@@ -77,6 +77,7 @@ export function DashboardClient({ user }: DashboardClientProps) {
   const [selectedListIds, setSelectedListIds] = useState<Set<string>>(new Set());
   const [selectedTemplateName, setSelectedTemplateName] = useState("event_details_reminder_1");
   const [campaignName, setCampaignName] = useState("Weekend event reminder");
+  const [scheduledAt, setScheduledAt] = useState("");
   const [headerImageId, setHeaderImageId] = useState("");
   const [headerImageName, setHeaderImageName] = useState("");
   const [parameterValues, setParameterValues] = useState<Record<string, string>>({
@@ -372,6 +373,10 @@ export function DashboardClient({ user }: DashboardClientProps) {
     };
   }, []);
 
+  // A campaign send/resume is streaming: drives the live delivery tracker and
+  // a faster message poll.
+  const liveTracking = !!sendProgress;
+
   // Background polling keeps notifications current even when the tab is hidden.
   useEffect(() => {
     const pollMessages = async () => {
@@ -404,7 +409,9 @@ export function DashboardClient({ user }: DashboardClientProps) {
     };
     document.addEventListener("visibilitychange", onVisible);
     void pollMessages();
-    const messageInterval = activeTab === "inbox" ? 3000 : 10000;
+    // Poll fast while the inbox is open or a campaign is actively sending, so
+    // the live delivery tracker updates in near real time.
+    const messageInterval = activeTab === "inbox" || liveTracking ? 3000 : 10000;
     const messageTimer = setInterval(pollMessages, messageInterval);
     const templateTimer = setInterval(pollTemplates, 30000);
     return () => {
@@ -412,7 +419,7 @@ export function DashboardClient({ user }: DashboardClientProps) {
       clearInterval(templateTimer);
       document.removeEventListener("visibilitychange", onVisible);
     };
-  }, [activeTab]);
+  }, [activeTab, liveTracking]);
 
   // Notifications from new inbound messages and outbound send failures.
   useEffect(() => {
@@ -814,6 +821,52 @@ export function DashboardClient({ user }: DashboardClientProps) {
       setCancelSendRequested(false);
       cancelSendRequestedRef.current = false;
       setTimeout(() => setSendProgress(null), 3500);
+    }
+  }
+
+  async function scheduleCampaign() {
+    if (!campaignRecipientCount) {
+      setNotice("Select at least one contact or list");
+      return;
+    }
+    if (selectedTemplate.headerFormat === "IMAGE" && !headerImageId) {
+      setNotice("Upload a header image before scheduling this template");
+      return;
+    }
+    if (!scheduledAt) {
+      setNotice("Pick a date and time to schedule");
+      return;
+    }
+    const when = new Date(scheduledAt);
+    if (Number.isNaN(when.getTime()) || when.getTime() <= Date.now()) {
+      setNotice("Choose a date and time in the future");
+      return;
+    }
+
+    setBusy("schedule");
+    try {
+      await api("/api/campaigns/send", {
+        method: "POST",
+        body: JSON.stringify({
+          name: campaignName,
+          templateName: selectedTemplate.name,
+          language: selectedTemplate.language,
+          parameters: parameterValues,
+          parameterOrder: selectedTemplate.parameters.map((parameter) => parameter.name),
+          contactFieldMappings,
+          headerImageId,
+          listIds: Array.from(selectedListIds),
+          contactIds: Array.from(selectedContactIds),
+          scheduledAt: when.toISOString()
+        })
+      });
+      await refreshAll();
+      setScheduledAt("");
+      toast.success(`Campaign scheduled for ${when.toLocaleString()}`);
+    } catch (err) {
+      setNotice(err instanceof Error ? err.message : "Could not schedule campaign");
+    } finally {
+      setBusy("");
     }
   }
 
@@ -1234,6 +1287,8 @@ export function DashboardClient({ user }: DashboardClientProps) {
           selectedTemplate={selectedTemplate}
           campaignName={campaignName}
           setCampaignName={setCampaignName}
+          scheduledAt={scheduledAt}
+          setScheduledAt={setScheduledAt}
           parameterValues={parameterValues}
           setParameterValues={setParameterValues}
           contactFieldMappings={contactFieldMappings}
@@ -1243,11 +1298,13 @@ export function DashboardClient({ user }: DashboardClientProps) {
           recipientCount={campaignRecipientCount}
           headerImageId={headerImageId}
           headerImageName={headerImageName}
+          messages={messages}
           busy={busy}
           progress={sendProgress}
           cancelRequested={cancelSendRequested}
           onUploadHeaderImage={uploadHeaderImage}
           onSend={sendCampaign}
+          onSchedule={scheduleCampaign}
           onCancel={cancelCurrentCampaign}
         />
       ) : null}

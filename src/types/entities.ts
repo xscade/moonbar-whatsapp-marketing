@@ -114,9 +114,17 @@ export type Campaign = {
   headerImageId?: string;
   listIds: string[];
   recipients: CampaignRecipient[];
-  status: "draft" | "sending" | "sent" | "partial" | "failed" | "canceled";
+  status:
+    | "draft"
+    | "scheduled"
+    | "sending"
+    | "sent"
+    | "partial"
+    | "failed"
+    | "canceled";
   cancelRequested?: boolean;
   canceledAt?: string;
+  scheduledAt?: string;
   acceptedCount: number;
   failedCount: number;
   createdBy?: string;

@@ -4,10 +4,6 @@ import { type FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import { motion } from "motion/react";
 import { formatDistanceToNow } from "date-fns";
 import {
-  AlertCircle,
-  Check,
-  CheckCheck,
-  Clock3,
   Code2,
   Inbox as InboxIcon,
   Loader2,
@@ -31,6 +27,14 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
 import { staggerContainer } from "@/lib/motion";
 import { cn } from "@/lib/utils";
+import {
+  StatusGlyph,
+  getInitials,
+  messageText,
+  phoneKey,
+  shortTime,
+  timeAgo
+} from "./conversation";
 import { InboxTemplateDialog } from "./InboxTemplateDialog";
 import { Section } from "./Section";
 import type { WebhookEvent, WhatsAppMessage, WhatsAppStatus } from "./types";
@@ -55,10 +59,6 @@ const statusTone: Record<string, BadgeVariant> = {
   failed: "destructive"
 };
 
-function phoneKey(phone?: string) {
-  return (phone || "").replace(/[^\d]/g, "");
-}
-
 function lastInboundMessage(conversation: ChatConversation) {
   return [...conversation.messages]
     .reverse()
@@ -74,37 +74,6 @@ function sessionExpiresAt(conversation: ChatConversation) {
 function isSessionOpen(conversation: ChatConversation) {
   const expiresAt = sessionExpiresAt(conversation);
   return !!expiresAt && expiresAt.getTime() > Date.now();
-}
-
-function getInitials(name: string) {
-  const parts = name
-    .replace(/[^\w\s]/g, "")
-    .split(/\s+/)
-    .filter(Boolean);
-  if (!parts.length) return "?";
-  return parts
-    .slice(0, 2)
-    .map((part) => part[0])
-    .join("")
-    .toUpperCase();
-}
-
-function messageText(message?: WhatsAppMessage) {
-  if (!message) return "Start a conversation";
-  return message.text || message.templateName || message.messageId || "WhatsApp message";
-}
-
-function timeAgo(value?: string) {
-  if (!value) return "";
-  return `${formatDistanceToNow(new Date(value))} ago`;
-}
-
-function shortTime(value?: string) {
-  if (!value) return "";
-  return new Date(value).toLocaleTimeString([], {
-    hour: "2-digit",
-    minute: "2-digit"
-  });
 }
 
 function formatError(errors?: unknown[]) {
@@ -130,55 +99,6 @@ function formatError(errors?: unknown[]) {
     return String(first.error.message);
   }
   return JSON.stringify(first).slice(0, 180);
-}
-
-function StatusGlyph({
-  status,
-  className
-}: {
-  status?: string;
-  className?: string;
-}) {
-  const normalized = (status || "").toLowerCase();
-
-  if (normalized === "failed") {
-    return (
-      <AlertCircle
-        className={cn("h-3.5 w-3.5 text-moon-red", className)}
-        aria-label="failed"
-      />
-    );
-  }
-  if (normalized === "read") {
-    return (
-      <CheckCheck
-        className={cn("h-4 w-4 text-[#34B7F1]", className)}
-        aria-label="read"
-      />
-    );
-  }
-  if (normalized === "delivered") {
-    return (
-      <CheckCheck
-        className={cn("h-4 w-4 text-moon-green/65", className)}
-        aria-label="delivered"
-      />
-    );
-  }
-  if (normalized === "sent" || normalized === "accepted") {
-    return (
-      <Check
-        className={cn("h-4 w-4 text-moon-green/65", className)}
-        aria-label="sent"
-      />
-    );
-  }
-  return (
-    <Clock3
-      className={cn("h-3.5 w-3.5 text-muted-foreground", className)}
-      aria-label="pending"
-    />
-  );
 }
 
 function MessageBubble({ message }: { message: WhatsAppMessage }) {

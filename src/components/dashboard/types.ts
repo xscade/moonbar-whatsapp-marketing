@@ -79,6 +79,7 @@ export type WhatsAppMessage = {
   text?: string;
   templateName?: string;
   lastStatus?: string;
+  campaignId?: string;
   errors?: unknown[];
   createdAt: string;
 };

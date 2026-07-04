@@ -1,7 +1,7 @@
 "use client";
 
 import { AnimatePresence, motion } from "motion/react";
-import { Loader2, Search, Send, Upload, Users, X } from "lucide-react";
+import { CalendarClock, Loader2, Search, Send, Upload, Users, X } from "lucide-react";
 
 import type {
   Contact,
@@ -25,8 +25,9 @@ import {
 } from "@/components/ui/select";
 import { staggerContainer } from "@/lib/motion";
 import { cn } from "@/lib/utils";
+import { CampaignLiveList } from "./CampaignLiveList";
 import { Section } from "./Section";
-import type { CampaignProgress } from "./types";
+import type { CampaignProgress, WhatsAppMessage } from "./types";
 
 export function Campaigns(props: {
   contacts: Contact[];
@@ -42,6 +43,8 @@ export function Campaigns(props: {
   selectedTemplate: MessageTemplate;
   campaignName: string;
   setCampaignName: (value: string) => void;
+  scheduledAt: string;
+  setScheduledAt: (value: string) => void;
   parameterValues: Record<string, string>;
   setParameterValues: (value: Record<string, string>) => void;
   contactFieldMappings: Record<string, ContactTemplateField>;
@@ -51,17 +54,36 @@ export function Campaigns(props: {
   recipientCount: number;
   headerImageId: string;
   headerImageName: string;
+  messages: WhatsAppMessage[];
   busy: string;
   progress: CampaignProgress | null;
   cancelRequested: boolean;
   onUploadHeaderImage: (file: File) => void;
   onSend: () => void;
+  onSchedule: () => void;
   onCancel: () => void;
 }) {
   const percent = props.progress?.total
     ? Math.round((props.progress.sent / props.progress.total) * 100)
     : 0;
   const sending = props.busy === "send" || props.busy === "media";
+  const scheduling = props.busy === "schedule";
+  const scheduleTime = props.scheduledAt ? new Date(props.scheduledAt) : null;
+  const scheduleIsValid =
+    !!scheduleTime &&
+    !Number.isNaN(scheduleTime.getTime()) &&
+    scheduleTime.getTime() > Date.now();
+  const blocked =
+    props.recipientCount === 0 ||
+    (props.selectedTemplate.headerFormat === "IMAGE" && !props.headerImageId);
+  // Earliest selectable time as a *local* wall-clock string (datetime-local
+  // ignores timezone), so the floor lines up with the admin's clock (e.g. IST).
+  const minSchedule = (() => {
+    const soon = new Date(Date.now() + 60_000);
+    return new Date(soon.getTime() - soon.getTimezoneOffset() * 60_000)
+      .toISOString()
+      .slice(0, 16);
+  })();
   const shownContactIds = props.contacts.map((contact) => contact._id);
   const shownSelectedCount = shownContactIds.filter((id) =>
     props.selectedContactIds.has(id)
@@ -216,16 +238,51 @@ export function Campaigns(props: {
             size="lg"
             className="justify-center"
             onClick={props.onSend}
-            disabled={
-              sending ||
-              props.recipientCount === 0 ||
-              (props.selectedTemplate.headerFormat === "IMAGE" &&
-                !props.headerImageId)
-            }
+            disabled={sending || scheduling || blocked}
           >
             {sending ? <Loader2 className="animate-spin" /> : <Send />}
             Send to {props.recipientCount.toLocaleString()}
           </Button>
+
+          <div className="grid gap-2 rounded-lg border border-moon-green/12 bg-muted/40 p-3.5">
+            <div className="flex items-center gap-2">
+              <CalendarClock className="h-4 w-4 text-moon-green" />
+              <Label htmlFor="schedule-at" className="text-sm">
+                Schedule for later
+              </Label>
+              <span className="text-xs text-muted-foreground">Optional</span>
+            </div>
+            <div className="flex flex-col gap-2 sm:flex-row">
+              <Input
+                id="schedule-at"
+                type="datetime-local"
+                value={props.scheduledAt}
+                min={minSchedule}
+                onChange={(event) => props.setScheduledAt(event.target.value)}
+                className="sm:flex-1"
+              />
+              <Button
+                variant="outline"
+                className="justify-center"
+                onClick={props.onSchedule}
+                disabled={sending || scheduling || blocked || !scheduleIsValid}
+              >
+                {scheduling ? (
+                  <Loader2 className="animate-spin" />
+                ) : (
+                  <CalendarClock />
+                )}
+                Schedule
+              </Button>
+            </div>
+            <p className="text-xs text-muted-foreground">
+              {props.scheduledAt && !scheduleIsValid
+                ? "Pick a time in the future."
+                : scheduleIsValid
+                  ? `Sends automatically around ${scheduleTime?.toLocaleString()}.`
+                  : "Save this broadcast to send automatically at a chosen time."}
+            </p>
+          </div>
 
           <AnimatePresence>
             {props.progress ? (
@@ -300,8 +357,12 @@ export function Campaigns(props: {
       </Section>
 
       <Section
-        title="Recipients"
-        description={`${props.recipientCount.toLocaleString()} selected`}
+        title={props.progress ? "Live delivery" : "Recipients"}
+        description={
+          props.progress
+            ? "Watching each send land in real time"
+            : `${props.recipientCount.toLocaleString()} selected`
+        }
         action={
           <Badge variant="secondary" className="gap-1">
             <Users className="h-3.5 w-3.5" />
@@ -309,6 +370,13 @@ export function Campaigns(props: {
           </Badge>
         }
       >
+        {props.progress ? (
+          <CampaignLiveList
+            messages={props.messages}
+            campaignId={props.progress.campaignId}
+            total={props.progress.total}
+          />
+        ) : (
         <div className="grid gap-4">
           <div className="grid gap-2">
             <p className="text-sm font-medium text-moon-ink">Lists</p>
@@ -431,6 +499,7 @@ export function Campaigns(props: {
             </ScrollArea>
           </div>
         </div>
+        )}
       </Section>
     </motion.div>
   );

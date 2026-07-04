@@ -26,6 +26,7 @@ const statusVariant: Record<
   partial: "warning",
   failed: "destructive",
   sending: "default",
+  scheduled: "warning",
   canceled: "muted",
   draft: "muted"
 };
@@ -86,7 +87,9 @@ export function CampaignTable({
           {campaigns.map((campaign) => {
             const delivery = getCampaignDeliveryStats(campaign);
             const queuedCount = delivery.queued;
+            const isScheduled = campaign.status === "scheduled";
             const canResume =
+              !isScheduled &&
               queuedCount > 0 &&
               campaign.status !== "canceled" &&
               !campaign.cancelRequested;
@@ -104,7 +107,12 @@ export function CampaignTable({
               >
                 <TableCell className="max-w-[15rem]">
                   <div className="font-medium text-moon-ink">{campaign.name}</div>
-                  {queuedCount > 0 ? (
+                  {isScheduled ? (
+                    <Badge variant="warning" className="mt-1">
+                      Scheduled · {queuedCount} recipient
+                      {queuedCount === 1 ? "" : "s"}
+                    </Badge>
+                  ) : queuedCount > 0 ? (
                     <Badge variant="destructive" className="mt-1">
                       {campaign.status === "canceled" ? "Canceled" : "Interrupted"} ·{" "}
                       {queuedCount} queued
@@ -153,9 +161,13 @@ export function CampaignTable({
                   </TableCell>
                 ) : null}
                 <TableCell className="whitespace-nowrap text-xs text-muted-foreground">
-                  {campaign.sentAt
-                    ? `${formatDistanceToNow(new Date(campaign.sentAt))} ago`
-                    : campaign.status}
+                  {isScheduled && campaign.scheduledAt
+                    ? formatDistanceToNow(new Date(campaign.scheduledAt), {
+                        addSuffix: true
+                      })
+                    : campaign.sentAt
+                      ? `${formatDistanceToNow(new Date(campaign.sentAt))} ago`
+                      : campaign.status}
                 </TableCell>
                 <TableCell className="text-right">
                   {canResume || canCancel ? (
