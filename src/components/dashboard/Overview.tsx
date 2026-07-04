@@ -72,6 +72,10 @@ function formatCampaignTime(value?: string) {
   });
 }
 
+function formatChartLabel(value: string) {
+  return value.length > 22 ? `${value.slice(0, 19)}...` : value;
+}
+
 function getInDeliveryCount(campaign: Campaign) {
   const delivery = getCampaignDeliveryStats(campaign);
   return Math.max(delivery.submitted - delivery.delivered, 0);
@@ -129,7 +133,25 @@ export function Overview({
           { name: "All campaigns", Sent: 0, Delivered: 0, "In delivery": 0 }
         );
 
-        return totals.Sent || totals.Delivered || totals["In delivery"] ? [totals] : [];
+        if (!totals.Sent && !totals.Delivered && !totals["In delivery"]) return [];
+
+        const campaignPoints = campaigns.slice(0, 8).map((campaign, index) => {
+          const delivery = getCampaignDeliveryStats(campaign);
+          const label =
+            campaign.name ||
+            campaign.templateName ||
+            formatCampaignTime(campaign.sentAt || campaign.createdAt) ||
+            `Campaign ${index + 1}`;
+
+          return {
+            name: formatChartLabel(label),
+            Sent: delivery.submitted,
+            Delivered: delivery.delivered,
+            "In delivery": getInDeliveryCount(campaign)
+          };
+        });
+
+        return [totals, ...campaignPoints];
       }
 
       return campaigns
@@ -239,7 +261,7 @@ export function Overview({
               <ResponsiveContainer width="100%" height="100%">
                 <AreaChart
                   data={chartData}
-                  margin={{ top: 8, right: 8, left: -18, bottom: 0 }}
+                  margin={{ top: 8, right: 8, left: 8, bottom: 0 }}
                 >
                   <defs>
                     <linearGradient id="fillDelivered" x1="0" y1="0" x2="0" y2="1">
@@ -269,7 +291,7 @@ export function Overview({
                   <YAxis
                     tickLine={false}
                     axisLine={false}
-                    width={44}
+                    width={58}
                     tick={{ fontSize: 11, fill: "hsl(var(--muted-foreground))" }}
                   />
                   <Tooltip content={<ChartTooltip />} />
