@@ -72,10 +72,6 @@ function formatCampaignTime(value?: string) {
   });
 }
 
-function formatTemplateLabel(value: string) {
-  return value.length > 22 ? `${value.slice(0, 19)}...` : value;
-}
-
 function getInDeliveryCount(campaign: Campaign) {
   const delivery = getCampaignDeliveryStats(campaign);
   return Math.max(delivery.submitted - delivery.delivered, 0);
@@ -122,29 +118,18 @@ export function Overview({
   const chartData = React.useMemo(
     () => {
       if (selectedTemplateFilter === "all") {
-        const byTemplate = new Map<
-          string,
-          { name: string; Sent: number; Delivered: number; "In delivery": number }
-        >();
+        const totals = campaigns.reduce(
+          (current, campaign) => {
+            const delivery = getCampaignDeliveryStats(campaign);
+            current.Sent += delivery.submitted;
+            current.Delivered += delivery.delivered;
+            current["In delivery"] += getInDeliveryCount(campaign);
+            return current;
+          },
+          { name: "All campaigns", Sent: 0, Delivered: 0, "In delivery": 0 }
+        );
 
-        for (const campaign of campaigns) {
-          const templateName = campaign.templateName || "Unknown template";
-          const delivery = getCampaignDeliveryStats(campaign);
-          const current = byTemplate.get(templateName) ?? {
-            name: formatTemplateLabel(templateName),
-            Sent: 0,
-            Delivered: 0,
-            "In delivery": 0
-          };
-          current.Sent += delivery.submitted;
-          current.Delivered += delivery.delivered;
-          current["In delivery"] += getInDeliveryCount(campaign);
-          byTemplate.set(templateName, current);
-        }
-
-        return Array.from(byTemplate.values())
-          .sort((a, b) => b.Sent - a.Sent)
-          .slice(0, 9);
+        return totals.Sent || totals.Delivered || totals["In delivery"] ? [totals] : [];
       }
 
       return campaigns
@@ -189,7 +174,7 @@ export function Overview({
 
   const trendDescription =
     selectedTemplateFilter === "all"
-      ? "Template-level delivery health across recent sends"
+      ? "Delivery health across all loaded campaigns"
       : `${selectedTemplateFilter} delivery is still updating from webhooks`;
 
   const statCards = [
