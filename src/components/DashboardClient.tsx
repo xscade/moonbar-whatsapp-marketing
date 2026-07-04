@@ -93,6 +93,8 @@ export function DashboardClient({ user }: DashboardClientProps) {
   const [busy, setBusy] = useState("");
   const [sendProgress, setSendProgress] = useState<CampaignProgress | null>(null);
   const [cancelSendRequested, setCancelSendRequested] = useState(false);
+  const sendCampaignInFlightRef = useRef(false);
+  const scheduleCampaignInFlightRef = useRef(false);
   const cancelSendRequestedRef = useRef(false);
 
   const [notifications, setNotifications] = useState<DashboardNotification[]>([]);
@@ -741,6 +743,8 @@ export function DashboardClient({ user }: DashboardClientProps) {
   }
 
   async function sendCampaign() {
+    if (sendCampaignInFlightRef.current) return;
+
     if (!campaignRecipientCount) {
       setNotice("Select at least one contact or list");
       return;
@@ -751,6 +755,17 @@ export function DashboardClient({ user }: DashboardClientProps) {
       return;
     }
 
+    const chosenSchedule = scheduledAt ? new Date(scheduledAt) : null;
+    if (
+      chosenSchedule &&
+      !Number.isNaN(chosenSchedule.getTime()) &&
+      chosenSchedule.getTime() > Date.now()
+    ) {
+      setNotice("Clear the scheduled time to send immediately, or use Schedule.");
+      return;
+    }
+
+    sendCampaignInFlightRef.current = true;
     setBusy("send");
     setCancelSendRequested(false);
     cancelSendRequestedRef.current = false;
@@ -767,11 +782,11 @@ export function DashboardClient({ user }: DashboardClientProps) {
         language: selectedTemplate.language,
         parameters: parameterValues,
         parameterOrder: selectedTemplate.parameters.map((parameter) => parameter.name),
-          contactFieldMappings,
-          headerImageId,
-          listIds: Array.from(selectedListIds),
-          contactIds: Array.from(selectedContactIds),
-          batchSize: 10
+        contactFieldMappings,
+        headerImageId,
+        listIds: Array.from(selectedListIds),
+        contactIds: Array.from(selectedContactIds),
+        batchSize: 10
       };
 
       let campaignId = "";
@@ -817,6 +832,7 @@ export function DashboardClient({ user }: DashboardClientProps) {
     } catch (err) {
       setNotice(err instanceof Error ? err.message : "Campaign failed");
     } finally {
+      sendCampaignInFlightRef.current = false;
       setBusy("");
       setCancelSendRequested(false);
       cancelSendRequestedRef.current = false;
@@ -825,6 +841,8 @@ export function DashboardClient({ user }: DashboardClientProps) {
   }
 
   async function scheduleCampaign() {
+    if (scheduleCampaignInFlightRef.current) return;
+
     if (!campaignRecipientCount) {
       setNotice("Select at least one contact or list");
       return;
@@ -843,6 +861,7 @@ export function DashboardClient({ user }: DashboardClientProps) {
       return;
     }
 
+    scheduleCampaignInFlightRef.current = true;
     setBusy("schedule");
     try {
       await api("/api/campaigns/send", {
@@ -866,6 +885,7 @@ export function DashboardClient({ user }: DashboardClientProps) {
     } catch (err) {
       setNotice(err instanceof Error ? err.message : "Could not schedule campaign");
     } finally {
+      scheduleCampaignInFlightRef.current = false;
       setBusy("");
     }
   }

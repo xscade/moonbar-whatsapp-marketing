@@ -58,7 +58,11 @@ async function runDueCampaigns() {
     let last: Awaited<ReturnType<typeof processCampaignBatch>> | undefined;
     try {
       while (Date.now() < deadline && !done) {
-        last = await processCampaignBatch({ campaignId, data: CONTINUATION });
+        last = await processCampaignBatch({
+          campaignId,
+          data: CONTINUATION,
+          runner: "cron"
+        });
         done = last.done;
       }
     } catch (err) {

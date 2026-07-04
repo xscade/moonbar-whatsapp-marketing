@@ -1,5 +1,6 @@
 import { ObjectId } from "mongodb";
 import { error, handleRouteError, json, requireUser } from "@/lib/api";
+import { getDb } from "@/lib/mongodb";
 import {
   createCampaign,
   processCampaignBatch,
@@ -41,6 +42,28 @@ export async function POST(request: Request) {
     if (parsed.data.campaignId) {
       if (!ObjectId.isValid(parsed.data.campaignId)) return error("Invalid campaign id", 422);
       campaignId = new ObjectId(parsed.data.campaignId);
+      const db = await getDb();
+      const existing = await db.collection("campaigns").findOne(
+        { _id: campaignId },
+        { projection: { status: 1, scheduledAt: 1, lockedAt: 1 } }
+      );
+      if (!existing) return error("Campaign not found", 404);
+      if (existing.status === "scheduled") {
+        const scheduledAt = existing.scheduledAt
+          ? new Date(existing.scheduledAt)
+          : null;
+        return error(
+          `This campaign is scheduled${
+            scheduledAt && !Number.isNaN(scheduledAt.getTime())
+              ? ` for ${scheduledAt.toLocaleString()}`
+              : ""
+          }. Cancel it or wait for the scheduler instead of sending it manually.`,
+          409
+        );
+      }
+      if (existing.lockedAt) {
+        return error("This campaign is already being processed by the scheduler.", 409);
+      }
     } else {
       campaignId = await createCampaign({ userId: user._id, data: parsed.data });
     }

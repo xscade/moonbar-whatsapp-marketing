@@ -249,14 +249,41 @@ export async function createCampaign({
 
 export async function processCampaignBatch({
   campaignId,
-  data
+  data,
+  runner = "manual"
 }: {
   campaignId: ObjectId;
   data: CampaignSendData;
+  runner?: "manual" | "cron";
 }) {
   const db = await getDb();
   const campaign = await db.collection("campaigns").findOne({ _id: campaignId });
   if (!campaign) throw new Error("Campaign not found");
+
+  const scheduledAt = campaign.scheduledAt
+    ? new Date(campaign.scheduledAt)
+    : null;
+  const scheduledAtText =
+    scheduledAt && !Number.isNaN(scheduledAt.getTime())
+      ? scheduledAt.toLocaleString()
+      : "its scheduled time";
+
+  if (runner === "manual") {
+    if (campaign.status === "scheduled") {
+      throw new Error(
+        `This campaign is scheduled for ${scheduledAtText}. Cancel it or wait for the scheduler instead of sending it manually.`
+      );
+    }
+    if (campaign.lockedAt) {
+      throw new Error("This campaign is already being processed by the scheduler.");
+    }
+  } else if (
+    campaign.status === "scheduled" &&
+    scheduledAt &&
+    scheduledAt.getTime() > Date.now()
+  ) {
+    throw new Error(`Campaign is not due until ${scheduledAtText}`);
+  }
 
   const recipients = Array.isArray(campaign.recipients)
     ? ([...campaign.recipients] as Recipient[])

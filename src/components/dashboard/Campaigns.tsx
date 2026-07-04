@@ -73,6 +73,7 @@ export function Campaigns(props: {
     !!scheduleTime &&
     !Number.isNaN(scheduleTime.getTime()) &&
     scheduleTime.getTime() > Date.now();
+  const sendNowBlockedBySchedule = scheduleIsValid;
   const blocked =
     props.recipientCount === 0 ||
     (props.selectedTemplate.headerFormat === "IMAGE" && !props.headerImageId);
@@ -235,13 +236,19 @@ export function Campaigns(props: {
           ) : null}
 
           <Button
+            type="button"
             size="lg"
             className="justify-center"
             onClick={props.onSend}
-            disabled={sending || scheduling || blocked}
+            disabled={sending || scheduling || blocked || sendNowBlockedBySchedule}
+            title={
+              sendNowBlockedBySchedule
+                ? "Clear the scheduled time to send immediately."
+                : undefined
+            }
           >
             {sending ? <Loader2 className="animate-spin" /> : <Send />}
-            Send to {props.recipientCount.toLocaleString()}
+            Send now to {props.recipientCount.toLocaleString()}
           </Button>
 
           <div className="grid gap-2 rounded-lg border border-moon-green/12 bg-muted/40 p-3.5">
@@ -262,6 +269,7 @@ export function Campaigns(props: {
                 className="sm:flex-1"
               />
               <Button
+                type="button"
                 variant="outline"
                 className="justify-center"
                 onClick={props.onSchedule}
