@@ -2,7 +2,7 @@
 
 import { Fragment, useEffect, useState } from "react";
 import { formatDistanceToNow } from "date-fns";
-import { History, Loader2, RefreshCw, X } from "lucide-react";
+import { Eye, History, Loader2, RefreshCw, X } from "lucide-react";
 
 import type { Campaign } from "@/types/entities";
 import { Badge } from "@/components/ui/badge";
@@ -43,6 +43,7 @@ export function CampaignTable({
   busy,
   onResume,
   onCancel,
+  onView,
   onOpenRetry,
   compact = false
 }: {
@@ -50,6 +51,7 @@ export function CampaignTable({
   busy: string;
   onResume: (campaign: Campaign) => void;
   onCancel: (campaign: Campaign) => void;
+  onView?: (campaign: Campaign) => void;
   onOpenRetry?: (campaign: Campaign) => void;
   compact?: boolean;
 }) {
@@ -249,6 +251,17 @@ export function CampaignTable({
                 </TableCell>
                 <TableCell className="text-right">
                   <div className="flex flex-col items-end gap-2">
+                    {onView ? (
+                      <Button
+                        type="button"
+                        size="sm"
+                        variant="outline"
+                        onClick={() => onView(campaign)}
+                      >
+                        <Eye />
+                        View
+                      </Button>
+                    ) : null}
                     {canResume || canCancel ? (
                       <div className="flex justify-end gap-2">
                         {canResume ? (

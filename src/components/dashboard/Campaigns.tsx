@@ -6,6 +6,8 @@ import {
   ArrowLeft,
   CalendarClock,
   Clock3,
+  Copy,
+  Eye,
   Loader2,
   Plus,
   RefreshCw,
@@ -44,7 +46,7 @@ import { staggerContainer } from "@/lib/motion";
 import { cn } from "@/lib/utils";
 import { CampaignLiveList } from "./CampaignLiveList";
 import { Section } from "./Section";
-import type { CampaignProgress, WhatsAppMessage } from "./types";
+import { getCampaignDeliveryStats, type CampaignProgress, type WhatsAppMessage } from "./types";
 
 const RETRY_INTERVAL_HOURS = 24;
 const RETRY_INTERVAL_MS = RETRY_INTERVAL_HOURS * 60 * 60 * 1000;
@@ -171,8 +173,9 @@ export function Campaigns(props: {
   const allShownSelected =
     shownContactIds.length > 0 && shownSelectedCount === shownContactIds.length;
 
-  const [view, setView] = useState<"list" | "builder">("list");
+  const [view, setView] = useState<"list" | "builder" | "viewer">("list");
   const [campaignSearch, setCampaignSearch] = useState("");
+  const [viewCampaignId, setViewCampaignId] = useState("");
 
   useEffect(() => {
     if (!props.retryPlanningEnabled) return;
@@ -206,6 +209,9 @@ export function Campaigns(props: {
   // A live send owns the screen — always show the builder so the admin can watch
   // delivery land and cancel if needed.
   const showBuilder = view === "builder" || !!props.progress;
+  const viewedCampaign = props.campaigns.find(
+    (campaign) => campaign._id === viewCampaignId
+  );
 
   const filteredCampaigns = useMemo(() => {
     const query = campaignSearch.trim().toLowerCase();
@@ -216,6 +222,55 @@ export function Campaigns(props: {
         campaign.templateName.toLowerCase().includes(query)
     );
   }, [props.campaigns, campaignSearch]);
+
+  function openViewer(campaign: Campaign) {
+    setViewCampaignId(campaign._id);
+    setView("viewer");
+  }
+
+  function reuseCampaign(campaign: Campaign) {
+    props.setCampaignName(`${campaign.name} copy`);
+    props.setSelectedTemplateName(campaign.templateName);
+    props.setParameterValues(campaign.parameters || {});
+    props.setContactFieldMappings(campaign.contactFieldMappings || {});
+    props.setSelectedListIds(new Set(campaign.listIds || []));
+    props.setSelectedContactIds(
+      new Set(
+        (campaign.recipients || [])
+          .map((recipient) => recipient.contactId)
+          .filter((id): id is string => Boolean(id))
+      )
+    );
+    props.setScheduledAt("");
+    props.setRetryPlanningEnabled(false);
+
+    if (campaign.retryPolicy) {
+      const relevantUntil = new Date(campaign.retryPolicy.relevantUntil);
+      if (!Number.isNaN(relevantUntil.getTime()) && relevantUntil.getTime() > Date.now()) {
+        props.setRetryPlanningEnabled(true);
+        props.setRetryMode(campaign.retryPolicy.mode);
+        props.setRetryRelevantUntil(toLocalInput(relevantUntil));
+        props.setRetryMaxRetries(
+          campaign.retryPolicy.mode === "once" ? 1 : campaign.retryPolicy.maxRetries
+        );
+      }
+    }
+
+    setView("builder");
+  }
+
+  if (view === "viewer" && viewedCampaign && !props.progress) {
+    return (
+      <CampaignViewer
+        campaign={viewedCampaign}
+        lists={props.lists}
+        templates={props.templates}
+        onBack={() => setView("list")}
+        onReuse={() => reuseCampaign(viewedCampaign)}
+        onOpenRetry={() => props.onOpenRetry(viewedCampaign)}
+      />
+    );
+  }
 
   if (!showBuilder) {
     return (
@@ -252,6 +307,7 @@ export function Campaigns(props: {
               busy={props.busy}
               onResume={props.onResume}
               onCancel={props.onCancelCampaign}
+              onView={openViewer}
               onOpenRetry={props.onOpenRetry}
             />
           </div>
@@ -890,4 +946,230 @@ export function Campaigns(props: {
       </motion.div>
     </div>
   );
+}
+
+function CampaignViewer({
+  campaign,
+  lists,
+  templates,
+  onBack,
+  onReuse,
+  onOpenRetry
+}: {
+  campaign: Campaign;
+  lists: ContactList[];
+  templates: MessageTemplate[];
+  onBack: () => void;
+  onReuse: () => void;
+  onOpenRetry: () => void;
+}) {
+  const delivery = getCampaignDeliveryStats(campaign);
+  const deliveryRate = delivery.submitted
+    ? Math.round((delivery.delivered / delivery.submitted) * 100)
+    : 0;
+  const template = templates.find(
+    (item) => item.name === campaign.templateName && item.language === campaign.language
+  );
+  const listNames = (campaign.listIds || [])
+    .map((id) => lists.find((list) => list._id === id)?.name)
+    .filter((name): name is string => Boolean(name));
+  const mappedFields = Object.entries(campaign.contactFieldMappings || {});
+  const parameters = Object.entries(campaign.parameters || {});
+  const retryPolicy = campaign.retryPolicy;
+
+  return (
+    <div className="grid gap-4">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <Button type="button" variant="ghost" size="sm" className="-ml-2" onClick={onBack}>
+          <ArrowLeft />
+          Back to campaigns
+        </Button>
+        <div className="flex flex-wrap gap-2">
+          <Button type="button" variant="outline" onClick={onOpenRetry}>
+            <RefreshCw />
+            Retry settings
+          </Button>
+          <Button type="button" onClick={onReuse}>
+            <Copy />
+            Reuse campaign
+          </Button>
+        </div>
+      </div>
+
+      <Section
+        title={campaign.name}
+        description="Campaign setup and delivery details"
+        action={
+          <Badge variant="secondary" className="capitalize">
+            {campaign.status}
+          </Badge>
+        }
+      >
+        <div className="grid gap-4 lg:grid-cols-[1.1fr_0.9fr]">
+          <div className="grid gap-4">
+            <div className="grid gap-3 rounded-lg border border-moon-green/12 bg-muted/30 p-4">
+              <div className="flex items-center gap-2 text-sm font-semibold text-moon-ink">
+                <Eye className="h-4 w-4 text-moon-green" />
+                Template
+              </div>
+              <div className="grid gap-2 sm:grid-cols-2">
+                <ViewerField label="Template name" value={campaign.templateName} />
+                <ViewerField label="Language" value={campaign.language} />
+              </div>
+              {template?.body ? (
+                <div className="rounded-lg border border-moon-green/12 bg-card p-3 text-sm">
+                  <p className="whitespace-pre-line text-muted-foreground">
+                    {template.body}
+                  </p>
+                </div>
+              ) : null}
+              <div className="grid gap-2 sm:grid-cols-2">
+                <ViewerField
+                  label="Header media"
+                  value={campaign.headerImageId ? "Configured" : "None"}
+                />
+                <ViewerField
+                  label="Created"
+                  value={new Date(campaign.createdAt).toLocaleString()}
+                />
+              </div>
+            </div>
+
+            <div className="grid gap-3 rounded-lg border border-moon-green/12 bg-muted/30 p-4">
+              <p className="text-sm font-semibold text-moon-ink">Template inputs</p>
+              {parameters.length || mappedFields.length ? (
+                <div className="grid gap-2 sm:grid-cols-2">
+                  {parameters.map(([key, value]) => (
+                    <ViewerField key={key} label={key} value={value || "—"} />
+                  ))}
+                  {mappedFields.map(([key, value]) => (
+                    <ViewerField key={`map-${key}`} label={`${key} mapped to`} value={value} />
+                  ))}
+                </div>
+              ) : (
+                <p className="text-sm text-muted-foreground">No template inputs saved.</p>
+              )}
+            </div>
+          </div>
+
+          <div className="grid gap-4">
+            <div className="grid gap-3 rounded-lg border border-moon-green/12 bg-muted/30 p-4">
+              <p className="text-sm font-semibold text-moon-ink">Delivery</p>
+              <div className="grid grid-cols-2 gap-2">
+                <ViewerStat label="Sent" value={delivery.submitted} />
+                <ViewerStat label="Delivered" value={delivery.delivered} />
+                <ViewerStat label="Read" value={delivery.read} />
+                <ViewerStat label="Failed" value={delivery.failed} />
+              </div>
+              <div className="flex items-center gap-2">
+                <Progress value={deliveryRate} className="h-2" />
+                <span className="w-10 text-right text-xs font-semibold tabular-nums text-muted-foreground">
+                  {deliveryRate}%
+                </span>
+              </div>
+            </div>
+
+            <div className="grid gap-3 rounded-lg border border-moon-green/12 bg-muted/30 p-4">
+              <p className="text-sm font-semibold text-moon-ink">Audience</p>
+              <ViewerField
+                label="Recipients"
+                value={campaign.recipients.length.toLocaleString()}
+              />
+              <ViewerField
+                label="Lists"
+                value={listNames.length ? listNames.join(", ") : "Direct contacts"}
+              />
+              <ViewerField
+                label="Scheduled"
+                value={
+                  campaign.scheduledAt
+                    ? new Date(campaign.scheduledAt).toLocaleString()
+                    : "Sent manually"
+                }
+              />
+            </div>
+
+            <div className="grid gap-3 rounded-lg border border-moon-green/12 bg-muted/30 p-4">
+              <p className="text-sm font-semibold text-moon-ink">Retry setup</p>
+              {retryPolicy ? (
+                <div className="grid gap-2">
+                  <ViewerField label="Mode" value={retryModeLabel(retryPolicy.mode)} />
+                  <ViewerField label="Status" value={retryPolicy.status} />
+                  <ViewerField
+                    label="Relevant until"
+                    value={new Date(retryPolicy.relevantUntil).toLocaleString()}
+                  />
+                  <ViewerField
+                    label="Attempts"
+                    value={`${retryPolicy.attemptsMade} of ${retryPolicy.maxRetries}`}
+                  />
+                </div>
+              ) : (
+                <p className="text-sm text-muted-foreground">Retries were not configured.</p>
+              )}
+            </div>
+          </div>
+        </div>
+      </Section>
+
+      <Section
+        title="Recipient snapshot"
+        description="Saved campaign recipients and latest WhatsApp status"
+      >
+        <ScrollArea className="max-h-80 rounded-lg border border-moon-green/12">
+          <div className="divide-y divide-moon-green/10">
+            {campaign.recipients.map((recipient, index) => (
+              <div
+                key={`${recipient.contactId || recipient.phone}-${index}`}
+                className="grid gap-1 px-3 py-2 text-sm sm:grid-cols-[1fr_1fr_auto]"
+              >
+                <span className="font-medium text-moon-ink">{recipient.name || "—"}</span>
+                <span className="text-muted-foreground">{recipient.phone}</span>
+                <Badge
+                  variant={
+                    recipient.lastStatus === "delivered" || recipient.lastStatus === "read"
+                      ? "success"
+                      : recipient.status === "failed"
+                        ? "destructive"
+                        : "muted"
+                  }
+                  className="w-fit capitalize"
+                >
+                  {recipient.lastStatus || recipient.status}
+                </Badge>
+              </div>
+            ))}
+          </div>
+        </ScrollArea>
+      </Section>
+    </div>
+  );
+}
+
+function ViewerField({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="rounded-lg border border-moon-green/12 bg-card px-3 py-2">
+      <p className="text-xs text-muted-foreground">{label}</p>
+      <p className="mt-0.5 break-words text-sm font-semibold text-moon-ink">
+        {value || "—"}
+      </p>
+    </div>
+  );
+}
+
+function ViewerStat({ label, value }: { label: string; value: number }) {
+  return (
+    <div className="rounded-lg border border-moon-green/12 bg-card px-3 py-2">
+      <p className="text-lg font-semibold tabular-nums text-moon-ink">
+        {value.toLocaleString()}
+      </p>
+      <p className="text-xs text-muted-foreground">{label}</p>
+    </div>
+  );
+}
+
+function retryModeLabel(mode: RetryMode): string {
+  if (mode === "once") return "Retry once";
+  if (mode === "until_delivered") return "Until delivered";
+  return "Auto calculate";
 }
