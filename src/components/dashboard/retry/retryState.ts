@@ -49,7 +49,7 @@ const HIDDEN: RetryChipState = {
  */
 export function getRetryChipState(campaign: Campaign): RetryChipState {
   const summary: RetrySummary | null | undefined = campaign.retrySummary;
-  const eligible = summary?.eligibleCount ?? campaign.eligibleRetryCount ?? 0;
+  const eligible = campaign.eligibleRetryCount ?? 0;
 
   if (!summary || summary.status === "none") {
     if (eligible > 0) {
@@ -151,10 +151,6 @@ export function getRetryChipState(campaign: Campaign): RetryChipState {
 export function shouldAutoExpand(campaign: Campaign): boolean {
   const summary = campaign.retrySummary;
   if (!summary || summary.status === "none") return false;
-  const hasHistory = summary.attemptsMade > 0 || summary.recoveredCount > 0;
-  if (summary.status === "active" && summary.eligibleCount === 0 && !hasHistory) {
-    return false;
-  }
   if (summary.processingCount > 0) return true;
   if (summary.status === "active" && summary.attemptsMade < summary.maxRetries)
     return true;
