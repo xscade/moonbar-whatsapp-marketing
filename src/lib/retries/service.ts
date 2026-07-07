@@ -6,8 +6,9 @@
 import { ObjectId, type WithId } from "mongodb";
 import type { Document } from "mongodb";
 import { getDb } from "@/lib/mongodb";
-import type { RetryPolicy, RetrySummary } from "@/types/entities";
+import type { RetryMode, RetryPolicy, RetrySummary } from "@/types/entities";
 import { getRetryCollections, type RetryAttemptDoc, type RetryPolicyDoc } from "./db";
+import { countRetryWindows } from "./constants";
 import {
   computeRetrySchedule,
   getRetryEligibility,
@@ -75,7 +76,7 @@ export async function getCampaignRetryState(
  */
 export function buildEligibilityResponse(
   state: CampaignRetryState,
-  options: { relevantUntil?: Date | null; maxRetries?: number; mode?: "once" | "automatic" }
+  options: { relevantUntil?: Date | null; maxRetries?: number; mode?: RetryMode }
 ): {
   eligibleCount: number;
   ineligibleCount: number;
@@ -97,18 +98,21 @@ export function buildEligibilityResponse(
   let schedule: ScheduledRetryPreview[] = [];
   const now = new Date();
   if (options.relevantUntil && eligibility.firstEligibleAt) {
-    const requested =
-      options.mode === "once"
-        ? 1
-        : options.maxRetries ?? eligibility.recommendedMaxRetries;
     const effectiveFirstEligibleAt =
       eligibility.firstEligibleAt.getTime() < now.getTime()
         ? now
         : eligibility.firstEligibleAt;
+    const requested =
+      options.mode === "once"
+        ? 1
+        : options.mode === "until_delivered" && options.relevantUntil
+          ? countRetryWindows(effectiveFirstEligibleAt, options.relevantUntil)
+          : options.maxRetries ?? eligibility.recommendedMaxRetries;
     schedule = computeRetrySchedule({
       firstEligibleAt: effectiveFirstEligibleAt,
       relevantUntil: options.relevantUntil,
-      maxRetries: Math.max(1, requested)
+      maxRetries: Math.max(1, requested),
+      enforceCap: options.mode !== "until_delivered"
     });
   }
 

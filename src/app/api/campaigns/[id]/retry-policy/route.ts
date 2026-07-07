@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { error, handleRouteError, json, requireUser } from "@/lib/api";
-import { getMaxRetriesCap } from "@/lib/retries/constants";
+import { countRetryWindows, getMaxRetriesCap } from "@/lib/retries/constants";
 import {
   cancelPolicy,
   updatePolicy,
@@ -11,9 +11,9 @@ import { getCampaignRetryState, serializeState } from "@/lib/retries/service";
 export const dynamic = "force-dynamic";
 
 const scheduleSchema = z.object({
-  mode: z.enum(["once", "automatic"]),
+  mode: z.enum(["once", "automatic", "until_delivered"]),
   relevantUntil: z.string().datetime(),
-  maxRetries: z.number().int().min(1).max(getMaxRetriesCap()).optional(),
+  maxRetries: z.number().int().min(1).optional(),
   timezone: z.string().optional()
 });
 
@@ -55,7 +55,17 @@ export async function POST(
     const requestedMax =
       parsed.data.mode === "once"
         ? 1
-        : parsed.data.maxRetries ?? state.eligibility.recommendedMaxRetries;
+        : parsed.data.mode === "until_delivered"
+          ? countRetryWindows(
+              firstEligibleAt.getTime() < Date.now()
+                ? new Date()
+                : firstEligibleAt,
+              relevantUntil
+            )
+          : Math.min(
+              parsed.data.maxRetries ?? state.eligibility.recommendedMaxRetries,
+              getMaxRetriesCap()
+            );
 
     await upsertPolicy({
       campaignId: id,

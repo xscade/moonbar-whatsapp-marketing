@@ -70,6 +70,9 @@ export function getRetryChipState(campaign: Campaign): RetryChipState {
 
   switch (summary.status) {
     case "active":
+      if (eligible === 0 && !hasHistory && summary.processingCount === 0) {
+        return HIDDEN;
+      }
       if (summary.processingCount > 0) {
         return {
           ...HIDDEN,
@@ -105,6 +108,7 @@ export function getRetryChipState(campaign: Campaign): RetryChipState {
         canConfigure: true
       };
     case "completed":
+      if (!hasHistory) return HIDDEN;
       return {
         ...HIDDEN,
         visible: true,

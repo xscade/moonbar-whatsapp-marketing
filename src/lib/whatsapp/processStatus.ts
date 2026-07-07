@@ -1,6 +1,7 @@
 import { getDb } from "@/lib/mongodb";
 import { ObjectId } from "mongodb";
 import { RETRY_INTERVAL_MS, isRetryableErrorCode } from "@/lib/retries/constants";
+import { getRetryableFailures } from "@/lib/retries/eligibility";
 
 type MetaError = {
   code?: number;
@@ -18,6 +19,18 @@ type MessageStatus = {
   conversation?: unknown;
   pricing?: unknown;
 };
+
+function hasPendingRecipientStatus(recipients: Array<Record<string, unknown>>): boolean {
+  return recipients.some((recipient) => {
+    if (recipient.status === "queued") return true;
+    if (recipient.status !== "accepted") return false;
+    return (
+      recipient.lastStatus !== "delivered" &&
+      recipient.lastStatus !== "read" &&
+      recipient.lastStatus !== "failed"
+    );
+  });
+}
 
 export async function processStatuses(
   statuses: MessageStatus[],
@@ -264,6 +277,55 @@ export async function processStatuses(
           }
         }
       );
+
+      const activeRetryPolicy = await db.collection("campaign_retry_policies").findOne(
+        {
+          campaignId: campaignIdStr,
+          status: { $in: ["active", "paused"] }
+        },
+        { projection: { maxRetries: 1 } }
+      );
+      const retryableFailures = getRetryableFailures(
+        { recipients },
+        typeof activeRetryPolicy?.maxRetries === "number"
+          ? activeRetryPolicy.maxRetries
+          : undefined
+      );
+      if (
+        activeRetryPolicy &&
+        !retryableFailures.length &&
+        !hasPendingRecipientStatus(recipients)
+      ) {
+        await db.collection("campaign_retry_attempts").updateMany(
+          {
+            campaignId: campaignIdStr,
+            status: { $in: ["scheduled", "queued", "processing"] }
+          },
+          {
+            $set: {
+              status: "cancelled",
+              completedAt: now,
+              updatedAt: now
+            }
+          }
+        );
+        await db.collection("campaign_retry_policies").updateOne(
+          {
+            campaignId: campaignIdStr,
+            status: { $in: ["active", "paused"] }
+          },
+          {
+            $set: {
+              status: "completed",
+              enabled: false,
+              cachedNextRetryAt: null,
+              activeAttemptNumber: null,
+              retryLockedAt: null,
+              updatedAt: now
+            }
+          }
+        );
+      }
     }
     updated += 1;
   }

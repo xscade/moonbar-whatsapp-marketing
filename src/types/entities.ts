@@ -153,7 +153,7 @@ export type RetryPolicyStatus =
   | "expired"
   | "cancelled";
 
-export type RetryMode = "once" | "automatic";
+export type RetryMode = "once" | "automatic" | "until_delivered";
 
 export type RetryAuditEntry = {
   action: string;

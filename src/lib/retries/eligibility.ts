@@ -183,10 +183,13 @@ export function computeRetrySchedule(params: {
   relevantUntil: Date;
   maxRetries: number;
   intervalHours?: number;
+  enforceCap?: boolean;
 }): ScheduledRetryPreview[] {
   const { firstEligibleAt, relevantUntil, maxRetries } = params;
   const intervalMs = (params.intervalHours ?? RETRY_INTERVAL_HOURS) * 60 * 60 * 1000;
-  const cap = Math.min(maxRetries, getMaxRetriesCap());
+  const cap = params.enforceCap === false
+    ? maxRetries
+    : Math.min(maxRetries, getMaxRetriesCap());
   const attempts: ScheduledRetryPreview[] = [];
 
   for (let i = 0; i < cap; i += 1) {

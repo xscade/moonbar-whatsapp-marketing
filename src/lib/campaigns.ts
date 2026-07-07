@@ -3,7 +3,11 @@ import { ObjectId, type Db, type Document } from "mongodb";
 import { getDb } from "@/lib/mongodb";
 import { graphGet, sendTemplate } from "@/lib/whatsapp";
 import { extractTemplate, type MetaTemplate } from "@/lib/whatsapp/templates";
-import { RETRY_INTERVAL_MS, getMaxRetriesCap } from "@/lib/retries/constants";
+import {
+  RETRY_INTERVAL_MS,
+  countRetryWindows,
+  getMaxRetriesCap
+} from "@/lib/retries/constants";
 import { upsertPolicy } from "@/lib/retries/policy";
 
 export const sendSchema = z.object({
@@ -21,7 +25,7 @@ export const sendSchema = z.object({
   retryPolicy: z
     .object({
       enabled: z.boolean().default(true),
-      mode: z.enum(["once", "automatic"]).default("automatic"),
+      mode: z.enum(["once", "automatic", "until_delivered"]).default("automatic"),
       relevantUntil: z.string().datetime(),
       maxRetries: z.number().int().min(1).optional(),
       timezone: z.string().optional()
@@ -127,7 +131,11 @@ function getInitialRetryPolicy({
 
   const mode = data.retryPolicy.mode;
   const requestedMax =
-    mode === "once" ? 1 : data.retryPolicy.maxRetries ?? getMaxRetriesCap();
+    mode === "once"
+      ? 1
+      : mode === "until_delivered"
+        ? countRetryWindows(firstEligibleAt, relevantUntil)
+        : data.retryPolicy.maxRetries ?? getMaxRetriesCap();
 
   return {
     mode,

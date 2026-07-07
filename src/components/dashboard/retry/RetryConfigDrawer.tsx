@@ -16,7 +16,13 @@ import {
   Trash2
 } from "lucide-react";
 
-import type { Campaign, RetryAttempt, RetryPolicy, RetrySummary } from "@/types/entities";
+import type {
+  Campaign,
+  RetryAttempt,
+  RetryMode,
+  RetryPolicy,
+  RetrySummary
+} from "@/types/entities";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -90,7 +96,7 @@ export function RetryConfigDrawer({
 }) {
   const [policy, setPolicy] = useState<RetryPolicy | null>(null);
   const [eligibility, setEligibility] = useState<Eligibility | null>(null);
-  const [mode, setMode] = useState<"once" | "automatic">("once");
+  const [mode, setMode] = useState<RetryMode>("once");
   const [relevantUntil, setRelevantUntil] = useState("");
   const [maxRetries, setMaxRetries] = useState(1);
   const [busy, setBusy] = useState<string | null>(null);
@@ -102,7 +108,7 @@ export function RetryConfigDrawer({
 
   // Fetch eligibility + schedule preview from the backend (authoritative).
   const loadEligibility = useCallback(
-    async (until: string, count: number, retryMode: "once" | "automatic") => {
+    async (until: string, count: number, retryMode: RetryMode) => {
       if (!campaignId) return;
       const query = new URLSearchParams();
       if (until) query.set("relevantUntil", new Date(until).toISOString());
@@ -294,8 +300,8 @@ export function RetryConfigDrawer({
           ) : (
             <>
               {/* Mode */}
-              <div className="grid grid-cols-2 gap-2">
-                {(["once", "automatic"] as const).map((value) => (
+              <div className="grid gap-2 sm:grid-cols-3">
+                {(["once", "automatic", "until_delivered"] as const).map((value) => (
                   <button
                     key={value}
                     type="button"
@@ -308,12 +314,18 @@ export function RetryConfigDrawer({
                     )}
                   >
                     <span className="block font-semibold">
-                      {value === "once" ? "Retry once" : "Automatic retries"}
+                      {value === "once"
+                        ? "Retry once"
+                        : value === "until_delivered"
+                          ? "Until delivered"
+                          : "Automatic retries"}
                     </span>
                     <span className="block text-xs text-muted-foreground">
                       {value === "once"
                         ? "One attempt after 24h"
-                        : "Repeat every 24h until relevant"}
+                        : value === "until_delivered"
+                          ? "Until delivered or expired"
+                          : "Repeat every 24h until relevant"}
                     </span>
                   </button>
                 ))}
@@ -350,6 +362,10 @@ export function RetryConfigDrawer({
                     <div className="flex h-10 items-center rounded-md border border-input bg-muted/40 px-3 text-sm text-muted-foreground">
                       1 attempt
                     </div>
+                  ) : mode === "until_delivered" ? (
+                    <div className="flex h-10 items-center rounded-md border border-input bg-muted/40 px-3 text-sm text-muted-foreground">
+                      Until delivered
+                    </div>
                   ) : (
                     <div className="flex h-10 items-center justify-between rounded-md border border-input bg-card px-2">
                       <button
@@ -384,6 +400,13 @@ export function RetryConfigDrawer({
                 <p className="text-xs text-muted-foreground">
                   Recommended: {recommended} — based on the selected campaign end
                   time.
+                </p>
+              ) : null}
+
+              {mode === "until_delivered" ? (
+                <p className="text-xs text-muted-foreground">
+                  Retries every 24 hours until all eligible contacts are delivered
+                  or the relevance date passes.
                 </p>
               ) : null}
 
@@ -481,7 +504,16 @@ function ManagePanel({
   return (
     <div className="space-y-4">
       <div className="grid grid-cols-2 gap-2 text-sm">
-        <Field label="Mode" value={policy.mode === "once" ? "Retry once" : "Automatic"} />
+        <Field
+          label="Mode"
+          value={
+            policy.mode === "once"
+              ? "Retry once"
+              : policy.mode === "until_delivered"
+                ? "Until delivered"
+                : "Automatic"
+          }
+        />
         <Field
           label="Attempts"
           value={`${policy.attemptsMade} of ${policy.maxRetries}`}

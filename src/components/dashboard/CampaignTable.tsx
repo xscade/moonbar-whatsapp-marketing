@@ -168,7 +168,9 @@ export function CampaignTable({
               : 0;
             const recovered =
               campaign.recoveredCount ?? campaign.retrySummary?.recoveredCount ?? 0;
-            const isExpanded = expanded.has(campaign._id);
+            const retryChipState = getRetryChipState(campaign);
+            const isExpanded =
+              expanded.has(campaign._id) && retryChipState.visible && retryChipState.showChevron;
 
             return (
               <Fragment key={campaign._id}>
@@ -274,7 +276,7 @@ export function CampaignTable({
                           Cancel
                         </Button>
                       </div>
-                    ) : !onOpenRetry || !getRetryChipState(campaign).visible ? (
+                    ) : !onOpenRetry || !retryChipState.visible ? (
                       <span className="text-xs text-muted-foreground">Done</span>
                     ) : null}
                     {onOpenRetry ? (

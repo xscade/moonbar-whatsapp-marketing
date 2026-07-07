@@ -39,7 +39,7 @@ export async function getAttemptDocs(
  */
 export async function upsertPolicy(params: {
   campaignId: string;
-  mode: "once" | "automatic";
+  mode: "once" | "automatic" | "until_delivered";
   relevantUntil: Date;
   requestedMax: number;
   firstEligibleAt: Date | null;
@@ -52,7 +52,11 @@ export async function upsertPolicy(params: {
   const cap = getMaxRetriesCap();
   const requestedMax = Math.max(
     1,
-    Math.min(params.mode === "once" ? 1 : params.requestedMax, cap)
+    params.mode === "once"
+      ? 1
+      : params.mode === "until_delivered"
+        ? params.requestedMax
+        : Math.min(params.requestedMax, cap)
   );
   const maxRetries = attemptsMade + requestedMax;
 

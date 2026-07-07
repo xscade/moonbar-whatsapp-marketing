@@ -21,7 +21,8 @@ import type {
   Contact,
   ContactList,
   ContactTemplateField,
-  MessageTemplate
+  MessageTemplate,
+  RetryMode
 } from "@/types/entities";
 import { CampaignTable } from "./CampaignTable";
 import { Badge } from "@/components/ui/badge";
@@ -77,8 +78,8 @@ export function Campaigns(props: {
   setScheduledAt: (value: string) => void;
   retryPlanningEnabled: boolean;
   setRetryPlanningEnabled: (value: boolean) => void;
-  retryMode: "once" | "automatic";
-  setRetryMode: (value: "once" | "automatic") => void;
+  retryMode: RetryMode;
+  setRetryMode: (value: RetryMode) => void;
   retryRelevantUntil: string;
   setRetryRelevantUntil: (value: string) => void;
   retryMaxRetries: number;
@@ -123,14 +124,18 @@ export function Campaigns(props: {
     (!!retryRelevantDate &&
       !Number.isNaN(retryRelevantDate.getTime()) &&
       retryRelevantDate.getTime() >= firstRetryAt.getTime());
-  const automaticRetryCount =
+  const retryWindowCount =
     retryRelevantDate && retryRelevantDate.getTime() >= firstRetryAt.getTime()
+      ? Math.floor(
+          (retryRelevantDate.getTime() - firstRetryAt.getTime()) /
+            RETRY_INTERVAL_MS
+        ) + 1
+      : 0;
+  const automaticRetryCount =
+    retryWindowCount > 0
       ? Math.min(
           MAX_RETRY_ATTEMPTS,
-          Math.floor(
-            (retryRelevantDate.getTime() - firstRetryAt.getTime()) /
-              RETRY_INTERVAL_MS
-          ) + 1
+          retryWindowCount
         )
       : 0;
   const plannedRetryCount = props.retryPlanningEnabled
@@ -138,11 +143,15 @@ export function Campaigns(props: {
       ? retryRelevantIsValid
         ? 1
         : 0
-      : Math.min(Math.max(props.retryMaxRetries, 1), automaticRetryCount)
+      : props.retryMode === "until_delivered"
+        ? retryWindowCount
+        : Math.min(Math.max(props.retryMaxRetries, 1), automaticRetryCount)
     : 0;
   const retryPreview = Array.from({ length: plannedRetryCount }, (_, index) =>
     new Date(firstRetryAt.getTime() + index * RETRY_INTERVAL_MS)
   );
+  const shownRetryPreview = retryPreview.slice(0, 5);
+  const hiddenRetryPreviewCount = Math.max(retryPreview.length - shownRetryPreview.length, 0);
   const blocked =
     props.recipientCount === 0 ||
     (props.selectedTemplate.headerFormat === "IMAGE" && !props.headerImageId) ||
@@ -180,10 +189,19 @@ export function Campaigns(props: {
   }, [props.retryPlanningEnabled, props.scheduledAt]);
 
   useEffect(() => {
-    if (!props.retryPlanningEnabled || props.retryMode !== "automatic") return;
-    props.setRetryMaxRetries(Math.max(1, automaticRetryCount || 1));
+    if (!props.retryPlanningEnabled) return;
+    if (props.retryMode === "automatic") {
+      props.setRetryMaxRetries(Math.max(1, automaticRetryCount || 1));
+    } else if (props.retryMode === "until_delivered") {
+      props.setRetryMaxRetries(Math.max(1, retryWindowCount || 1));
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [props.retryPlanningEnabled, props.retryMode, automaticRetryCount]);
+  }, [
+    props.retryPlanningEnabled,
+    props.retryMode,
+    automaticRetryCount,
+    retryWindowCount
+  ]);
 
   // A live send owns the screen — always show the builder so the admin can watch
   // delivery land and cancel if needed.
@@ -457,7 +475,7 @@ export function Campaigns(props: {
                   </p>
                 </div>
 
-                <div className="grid gap-2 sm:grid-cols-2">
+                <div className="grid gap-2 sm:grid-cols-3">
                   <button
                     type="button"
                     onClick={() => {
@@ -489,6 +507,21 @@ export function Campaigns(props: {
                     <span className="font-medium">Auto calculate</span>
                     <span className="mt-1 block text-xs opacity-75">
                       Fits retries before the relevancy date.
+                    </span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => props.setRetryMode("until_delivered")}
+                    className={cn(
+                      "rounded-lg border px-3 py-2 text-left text-sm transition-colors",
+                      props.retryMode === "until_delivered"
+                        ? "border-moon-green bg-moon-green text-moon-paper"
+                        : "border-moon-green/18 bg-card text-moon-ink hover:bg-moon-cream/50"
+                    )}
+                  >
+                    <span className="font-medium">Until delivered</span>
+                    <span className="mt-1 block text-xs opacity-75">
+                      Retry until delivered or relevance ends.
                     </span>
                   </button>
                 </div>
@@ -545,13 +578,31 @@ export function Campaigns(props: {
                   </div>
                 ) : null}
 
+                {props.retryMode === "until_delivered" ? (
+                  <div className="rounded-lg border border-moon-green/12 bg-card px-3 py-2">
+                    <p className="text-sm font-medium text-moon-ink">
+                      Retry until delivered
+                    </p>
+                    <p className="mt-1 text-xs text-muted-foreground">
+                      Runs every 24 hours until the event relevance date, and
+                      stops earlier once all eligible contacts are delivered or
+                      no longer retryable.
+                    </p>
+                  </div>
+                ) : null}
+
                 {retryPreview.length ? (
                   <div className="grid gap-1 text-xs text-muted-foreground">
-                    {retryPreview.map((date, index) => (
+                    {shownRetryPreview.map((date, index) => (
                       <span key={date.toISOString()}>
                         Retry #{index + 1}: {date.toLocaleString()}
                       </span>
                     ))}
+                    {hiddenRetryPreviewCount ? (
+                      <span>
+                        +{hiddenRetryPreviewCount} more before relevance ends
+                      </span>
+                    ) : null}
                   </div>
                 ) : (
                   <p className="text-xs font-medium text-moon-red">

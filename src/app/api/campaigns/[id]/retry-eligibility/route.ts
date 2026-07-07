@@ -29,7 +29,10 @@ export async function GET(
     const relevantUntil = parseDate(url.searchParams.get("relevantUntil"));
     const maxRetriesRaw = url.searchParams.get("maxRetries");
     const modeRaw = url.searchParams.get("mode");
-    const mode = modeRaw === "automatic" ? "automatic" : modeRaw === "once" ? "once" : undefined;
+    const mode =
+      modeRaw === "automatic" || modeRaw === "once" || modeRaw === "until_delivered"
+        ? modeRaw
+        : undefined;
 
     return json(
       buildEligibilityResponse(state, {

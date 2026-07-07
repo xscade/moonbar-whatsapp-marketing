@@ -32,6 +32,18 @@ export const RETRYABLE_ERROR_CODES = [131049] as const;
 
 export const RETRY_INTERVAL_MS = RETRY_INTERVAL_HOURS * 60 * 60 * 1000;
 
+export function countRetryWindows(
+  firstRetryAt: Date,
+  relevantUntil: Date
+): number {
+  if (relevantUntil.getTime() < firstRetryAt.getTime()) return 0;
+  return (
+    Math.floor(
+      (relevantUntil.getTime() - firstRetryAt.getTime()) / RETRY_INTERVAL_MS
+    ) + 1
+  );
+}
+
 /** How long a per-campaign retry lock may be held before a later tick reclaims it. */
 export const RETRY_STALE_LOCK_MS = 3 * 60_000;
 

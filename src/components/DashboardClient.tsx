@@ -9,6 +9,7 @@ import type {
   ContactList,
   ContactTemplateField,
   MessageTemplate,
+  RetryMode,
   TemplateBuilderPayload
 } from "@/types/entities";
 
@@ -82,7 +83,7 @@ export function DashboardClient({ user }: DashboardClientProps) {
   const [campaignName, setCampaignName] = useState("Weekend event reminder");
   const [scheduledAt, setScheduledAt] = useState("");
   const [retryPlanningEnabled, setRetryPlanningEnabled] = useState(false);
-  const [retryMode, setRetryMode] = useState<"once" | "automatic">("automatic");
+  const [retryMode, setRetryMode] = useState<RetryMode>("automatic");
   const [retryRelevantUntil, setRetryRelevantUntil] = useState("");
   const [retryMaxRetries, setRetryMaxRetries] = useState(1);
   const [headerImageId, setHeaderImageId] = useState("");
@@ -404,14 +405,18 @@ export function DashboardClient({ user }: DashboardClientProps) {
   useEffect(() => {
     const pollMessages = async () => {
       try {
-        const res = await api<{
-          messages: WhatsAppMessage[];
-          statuses: WhatsAppStatus[];
-          events: WebhookEvent[];
-        }>("/api/messages");
-        setMessages(res.messages);
-        setStatuses(res.statuses);
-        setWebhookEvents(res.events);
+        const [messageRes, campaignRes] = await Promise.all([
+          api<{
+            messages: WhatsAppMessage[];
+            statuses: WhatsAppStatus[];
+            events: WebhookEvent[];
+          }>("/api/messages"),
+          api<{ data: Campaign[] }>("/api/campaigns")
+        ]);
+        setMessages(messageRes.messages);
+        setStatuses(messageRes.statuses);
+        setWebhookEvents(messageRes.events);
+        setCampaigns(campaignRes.data);
       } catch {
         // ignore transient poll errors
       }
@@ -786,12 +791,21 @@ export function DashboardClient({ user }: DashboardClientProps) {
       };
     }
 
+    const windowCount = Math.floor(
+      (relevantUntil.getTime() - firstRetryAt.getTime()) / (24 * 3600_000)
+    ) + 1;
+
     return {
       payload: {
         enabled: true,
         mode: retryMode,
         relevantUntil: relevantUntil.toISOString(),
-        maxRetries: retryMode === "once" ? 1 : retryMaxRetries,
+        maxRetries:
+          retryMode === "once"
+            ? 1
+            : retryMode === "until_delivered"
+              ? windowCount
+              : retryMaxRetries,
         timezone: Intl.DateTimeFormat().resolvedOptions().timeZone
       },
       error: ""
