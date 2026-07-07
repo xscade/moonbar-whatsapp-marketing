@@ -1294,6 +1294,9 @@ export function DashboardClient({ user }: DashboardClientProps) {
 
       {activeTab === "campaigns" ? (
         <Campaigns
+          campaigns={campaigns}
+          onResume={resumeCampaign}
+          onCancelCampaign={cancelCampaign}
           contacts={filteredContacts}
           allContacts={contacts}
           lists={lists}

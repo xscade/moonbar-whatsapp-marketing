@@ -1,14 +1,27 @@
 "use client";
 
+import { useMemo, useState } from "react";
 import { AnimatePresence, motion } from "motion/react";
-import { CalendarClock, Loader2, Search, Send, Upload, Users, X } from "lucide-react";
+import {
+  ArrowLeft,
+  CalendarClock,
+  Loader2,
+  Plus,
+  Search,
+  Send,
+  Upload,
+  Users,
+  X
+} from "lucide-react";
 
 import type {
+  Campaign,
   Contact,
   ContactList,
   ContactTemplateField,
   MessageTemplate
 } from "@/types/entities";
+import { CampaignTable } from "./CampaignTable";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -30,6 +43,9 @@ import { Section } from "./Section";
 import type { CampaignProgress, WhatsAppMessage } from "./types";
 
 export function Campaigns(props: {
+  campaigns: Campaign[];
+  onResume: (campaign: Campaign) => void;
+  onCancelCampaign: (campaign: Campaign) => void;
   contacts: Contact[];
   allContacts: Contact[];
   lists: ContactList[];
@@ -92,13 +108,87 @@ export function Campaigns(props: {
   const allShownSelected =
     shownContactIds.length > 0 && shownSelectedCount === shownContactIds.length;
 
+  const [view, setView] = useState<"list" | "builder">("list");
+  const [campaignSearch, setCampaignSearch] = useState("");
+
+  // A live send owns the screen — always show the builder so the admin can watch
+  // delivery land and cancel if needed.
+  const showBuilder = view === "builder" || !!props.progress;
+
+  const filteredCampaigns = useMemo(() => {
+    const query = campaignSearch.trim().toLowerCase();
+    if (!query) return props.campaigns;
+    return props.campaigns.filter(
+      (campaign) =>
+        campaign.name.toLowerCase().includes(query) ||
+        campaign.templateName.toLowerCase().includes(query)
+    );
+  }, [props.campaigns, campaignSearch]);
+
+  if (!showBuilder) {
+    return (
+      <motion.div
+        variants={staggerContainer}
+        initial="hidden"
+        animate="show"
+        className="grid gap-4"
+      >
+        <Section
+          title="Campaigns"
+          description={`${props.campaigns.length.toLocaleString()} broadcast${
+            props.campaigns.length === 1 ? "" : "s"
+          }`}
+          action={
+            <Button type="button" onClick={() => setView("builder")}>
+              <Plus />
+              New campaign
+            </Button>
+          }
+        >
+          <div className="grid gap-4">
+            <div className="relative max-w-sm">
+              <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-moon-ink/40" />
+              <Input
+                value={campaignSearch}
+                onChange={(event) => setCampaignSearch(event.target.value)}
+                placeholder="Search campaigns"
+                className="pl-9"
+              />
+            </div>
+            <CampaignTable
+              campaigns={filteredCampaigns}
+              busy={props.busy}
+              onResume={props.onResume}
+              onCancel={props.onCancelCampaign}
+            />
+          </div>
+        </Section>
+      </motion.div>
+    );
+  }
+
   return (
-    <motion.div
-      variants={staggerContainer}
-      initial="hidden"
-      animate="show"
-      className="grid gap-6 xl:grid-cols-[0.95fr_1.05fr]"
-    >
+    <div className="grid gap-4">
+      {!props.progress ? (
+        <div>
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            className="-ml-2"
+            onClick={() => setView("list")}
+          >
+            <ArrowLeft />
+            Back to campaigns
+          </Button>
+        </div>
+      ) : null}
+      <motion.div
+        variants={staggerContainer}
+        initial="hidden"
+        animate="show"
+        className="grid gap-6 xl:grid-cols-[0.95fr_1.05fr]"
+      >
       <Section title="Campaign builder" description="Compose your broadcast">
         <div className="grid gap-4">
           <div className="grid gap-2">
@@ -509,6 +599,7 @@ export function Campaigns(props: {
         </div>
         )}
       </Section>
-    </motion.div>
+      </motion.div>
+    </div>
   );
 }
