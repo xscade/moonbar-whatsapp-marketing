@@ -58,6 +58,25 @@ function toLocalInput(date: Date): string {
     .slice(0, 16);
 }
 
+function defaultRelevantUntil(firstEligibleAt?: string | null): Date {
+  const now = Date.now();
+  const fallback = new Date(now + 48 * 3600_000);
+  if (!firstEligibleAt) return fallback;
+
+  const firstEligible = new Date(firstEligibleAt);
+  if (Number.isNaN(firstEligible.getTime())) return fallback;
+
+  const seeded = new Date(firstEligible.getTime() + 24 * 3600_000);
+  return seeded.getTime() > now ? seeded : fallback;
+}
+
+function usablePolicyRelevantUntil(policy?: RetryPolicy | null): string | null {
+  if (!policy?.relevantUntil) return null;
+  const date = new Date(policy.relevantUntil);
+  if (Number.isNaN(date.getTime()) || date.getTime() <= Date.now()) return null;
+  return policy.relevantUntil;
+}
+
 export function RetryConfigDrawer({
   campaign,
   open,
@@ -107,12 +126,11 @@ export function RetryConfigDrawer({
     (async () => {
       try {
         const initial = await loadEligibility("", 1, "once");
-        const seed = initial?.firstEligibleAt
-          ? new Date(new Date(initial.firstEligibleAt).getTime() + 24 * 3600_000)
-          : new Date(Date.now() + 48 * 3600_000);
+        const policyRelevantUntil = usablePolicyRelevantUntil(campaign.retryPolicy);
+        const seed = defaultRelevantUntil(initial?.firstEligibleAt);
         const until =
-          campaign.retryPolicy?.relevantUntil
-            ? toLocalInput(new Date(campaign.retryPolicy.relevantUntil))
+          policyRelevantUntil
+            ? toLocalInput(new Date(policyRelevantUntil))
             : toLocalInput(seed);
         setRelevantUntil(until);
         setMaxRetries(campaign.retryPolicy?.mode === "automatic" ? 2 : 1);

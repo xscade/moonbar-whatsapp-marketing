@@ -95,13 +95,18 @@ export function buildEligibilityResponse(
   );
 
   let schedule: ScheduledRetryPreview[] = [];
+  const now = new Date();
   if (options.relevantUntil && eligibility.firstEligibleAt) {
     const requested =
       options.mode === "once"
         ? 1
         : options.maxRetries ?? eligibility.recommendedMaxRetries;
+    const effectiveFirstEligibleAt =
+      eligibility.firstEligibleAt.getTime() < now.getTime()
+        ? now
+        : eligibility.firstEligibleAt;
     schedule = computeRetrySchedule({
-      firstEligibleAt: eligibility.firstEligibleAt,
+      firstEligibleAt: effectiveFirstEligibleAt,
       relevantUntil: options.relevantUntil,
       maxRetries: Math.max(1, requested)
     });
@@ -114,9 +119,11 @@ export function buildEligibilityResponse(
     firstEligibleAt: eligibility.firstEligibleAt
       ? eligibility.firstEligibleAt.toISOString()
       : null,
-    recommendedMaxRetries: eligibility.recommendedMaxRetries,
+    recommendedMaxRetries: schedule.length || eligibility.recommendedMaxRetries,
     errorCode: eligibility.errorCode,
-    canSchedule: schedule.length > 0,
+    canSchedule:
+      schedule.length > 0 &&
+      (!options.relevantUntil || options.relevantUntil.getTime() > now.getTime()),
     schedule: schedule.map((s) => ({
       attemptNumber: s.attemptNumber,
       approxAt: s.approxAt.toISOString()

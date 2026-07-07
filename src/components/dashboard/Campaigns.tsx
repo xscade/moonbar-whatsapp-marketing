@@ -410,7 +410,7 @@ export function Campaigns(props: {
                   </Label>
                   <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
                     Some Meta 131049 failures may become eligible later. Retries
-                    run every 24 hours and delivery is not guaranteed.
+                    run every 24 hours to maximise the delivery rate.
                   </p>
                 </div>
               </div>
