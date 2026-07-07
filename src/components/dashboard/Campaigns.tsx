@@ -46,6 +46,7 @@ export function Campaigns(props: {
   campaigns: Campaign[];
   onResume: (campaign: Campaign) => void;
   onCancelCampaign: (campaign: Campaign) => void;
+  onOpenRetry: (campaign: Campaign) => void;
   contacts: Contact[];
   allContacts: Contact[];
   lists: ContactList[];
@@ -160,6 +161,7 @@ export function Campaigns(props: {
               busy={props.busy}
               onResume={props.onResume}
               onCancel={props.onCancelCampaign}
+              onOpenRetry={props.onOpenRetry}
             />
           </div>
         </Section>

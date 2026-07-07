@@ -27,6 +27,7 @@ import { Lists } from "./dashboard/Lists";
 import { Templates } from "./dashboard/Templates";
 import { Reports } from "./dashboard/Reports";
 import { Settings } from "./dashboard/Settings";
+import { RetryConfigDrawer } from "./dashboard/retry/RetryConfigDrawer";
 import {
   csvToArray,
   fallbackTemplate,
@@ -67,6 +68,8 @@ export function DashboardClient({ user }: DashboardClientProps) {
   const [lists, setLists] = useState<ContactList[]>([]);
   const [templates, setTemplates] = useState<MessageTemplate[]>([]);
   const [campaigns, setCampaigns] = useState<Campaign[]>([]);
+  const [retryCampaign, setRetryCampaign] = useState<Campaign | null>(null);
+  const [retryOpen, setRetryOpen] = useState(false);
   const [messages, setMessages] = useState<WhatsAppMessage[]>([]);
   const [statuses, setStatuses] = useState<WhatsAppStatus[]>([]);
   const [webhookEvents, setWebhookEvents] = useState<WebhookEvent[]>([]);
@@ -229,6 +232,20 @@ export function DashboardClient({ user }: DashboardClientProps) {
     } finally {
       setBusy("");
     }
+  }
+
+  async function refreshCampaigns() {
+    try {
+      const campaignRes = await api<{ data: Campaign[] }>("/api/campaigns");
+      setCampaigns(campaignRes.data);
+    } catch {
+      /* transient refresh failure — the row keeps its last-known retry state */
+    }
+  }
+
+  function openRetry(campaign: Campaign) {
+    setRetryCampaign(campaign);
+    setRetryOpen(true);
   }
 
   async function refreshMessages() {
@@ -1266,6 +1283,7 @@ export function DashboardClient({ user }: DashboardClientProps) {
           onRefresh={refreshAll}
           onResume={resumeCampaign}
           onCancel={cancelCampaign}
+          onOpenRetry={openRetry}
         />
       ) : null}
 
@@ -1297,6 +1315,7 @@ export function DashboardClient({ user }: DashboardClientProps) {
           campaigns={campaigns}
           onResume={resumeCampaign}
           onCancelCampaign={cancelCampaign}
+          onOpenRetry={openRetry}
           contacts={filteredContacts}
           allContacts={contacts}
           lists={lists}
@@ -1380,6 +1399,7 @@ export function DashboardClient({ user }: DashboardClientProps) {
           busy={busy}
           onResume={resumeCampaign}
           onCancel={cancelCampaign}
+          onOpenRetry={openRetry}
         />
       ) : null}
 
@@ -1392,6 +1412,13 @@ export function DashboardClient({ user }: DashboardClientProps) {
           onNotificationSoundEnabledChange={updateNotificationSoundEnabled}
         />
       ) : null}
+
+      <RetryConfigDrawer
+        campaign={retryCampaign}
+        open={retryOpen}
+        onOpenChange={setRetryOpen}
+        onChanged={refreshCampaigns}
+      />
     </DashboardShell>
   );
 }

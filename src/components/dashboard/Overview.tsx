@@ -89,7 +89,8 @@ export function Overview({
   onSync,
   onRefresh,
   onResume,
-  onCancel
+  onCancel,
+  onOpenRetry
 }: {
   stats: Record<string, number>;
   campaigns: Campaign[];
@@ -99,6 +100,7 @@ export function Overview({
   onRefresh: () => void;
   onResume: (campaign: Campaign) => void;
   onCancel: (campaign: Campaign) => void;
+  onOpenRetry?: (campaign: Campaign) => void;
 }) {
   const [selectedTemplateFilter, setSelectedTemplateFilter] = React.useState("all");
 
@@ -401,6 +403,7 @@ export function Overview({
           busy={busy}
           onResume={onResume}
           onCancel={onCancel}
+          onOpenRetry={onOpenRetry}
           compact
         />
       </Section>

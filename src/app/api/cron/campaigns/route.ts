@@ -1,6 +1,7 @@
 import { handleRouteError, json } from "@/lib/api";
 import { getDb } from "@/lib/mongodb";
 import { processCampaignBatch, sendSchema } from "@/lib/campaigns";
+import { runDueRetries } from "@/lib/retries/dispatch";
 
 export const maxDuration = 60;
 export const dynamic = "force-dynamic";
@@ -8,6 +9,9 @@ export const dynamic = "force-dynamic";
 // How long to keep working within a single invocation before returning so the
 // serverless function doesn't get killed mid-batch. The next cron tick resumes.
 const TIME_BUDGET_MS = 50_000;
+// Time reserved at the end of each tick for the retry dispatcher so a busy
+// campaign backlog can't starve retries indefinitely.
+const RETRY_RESERVE_MS = 15_000;
 // A campaign lock older than this is treated as a dead run (crashed/timed-out)
 // and may be reclaimed by a later tick.
 const STALE_LOCK_MS = 3 * 60_000;
@@ -26,10 +30,9 @@ function authorize(request: Request): boolean {
   return url.searchParams.get("secret") === secret;
 }
 
-async function runDueCampaigns() {
+async function runDueCampaigns(deadline: number) {
   const db = await getDb();
   const campaigns = db.collection("campaigns");
-  const deadline = Date.now() + TIME_BUDGET_MS;
   const processed: Array<Record<string, unknown>> = [];
 
   while (Date.now() < deadline) {
@@ -109,8 +112,16 @@ async function handle(request: Request) {
     if (!authorize(request)) {
       return json({ error: { message: "Unauthorized" } }, { status: 401 });
     }
-    const result = await runDueCampaigns();
-    return json({ ok: true, ...result });
+    // One shared budget: campaigns drain first, then the retry dispatcher gets
+    // the reserved tail so it always runs even under a campaign backlog.
+    const deadline = Date.now() + TIME_BUDGET_MS;
+    const cronRunId =
+      request.headers.get("x-cron-run-id") ??
+      request.headers.get("x-cron-runid") ??
+      undefined;
+    const result = await runDueCampaigns(deadline - RETRY_RESERVE_MS);
+    const retries = await runDueRetries({ deadline, cronRunId });
+    return json({ ok: true, ...result, retries });
   } catch (err) {
     return handleRouteError(err);
   }

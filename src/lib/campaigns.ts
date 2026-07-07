@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { ObjectId } from "mongodb";
+import { ObjectId, type Db, type Document } from "mongodb";
 import { getDb } from "@/lib/mongodb";
 import { graphGet, sendTemplate } from "@/lib/whatsapp";
 import { extractTemplate, type MetaTemplate } from "@/lib/whatsapp/templates";
@@ -146,6 +146,185 @@ async function getTemplateDetails({
   );
 
   return latestTemplate;
+}
+
+/**
+ * Everything needed to render one recipient's template send. Resolved once per
+ * batch (or retry attempt) from the campaign's stored config plus any overrides,
+ * so the actual send loop stays cheap.
+ */
+export type CampaignSendContext = {
+  templateName: string;
+  language: string;
+  parameters: Record<string, string>;
+  contactFieldMappings: Record<string, ContactField>;
+  parameterOrder: string[];
+  parameterFormat: "NAMED" | "POSITIONAL";
+  headerImageId?: string;
+};
+
+/**
+ * Resolves the template + parameters + header image for a campaign, refreshing
+ * the template from Meta if the local copy is stale and recovering the header
+ * image id from a prior message when needed. Shared by the live send loop and
+ * the retry dispatcher so both send through identical logic. Throws if an image
+ * header template is missing its media id.
+ */
+export async function resolveCampaignSendContext({
+  db,
+  campaign,
+  data
+}: {
+  db: Db;
+  campaign: Document;
+  data?: Partial<CampaignSendData>;
+}): Promise<CampaignSendContext> {
+  const templateName = data?.templateName || campaign.templateName;
+  const language = data?.language || campaign.language;
+  const parameters = Object.keys(data?.parameters || {}).length
+    ? (data!.parameters as Record<string, string>)
+    : campaign.parameters;
+  let contactFieldMappings: Record<string, ContactField> = Object.keys(
+    data?.contactFieldMappings || {}
+  ).length
+    ? (data!.contactFieldMappings as Record<string, ContactField>)
+    : campaign.contactFieldMappings || {};
+  let parameterOrder: string[] = data?.parameterOrder?.length
+    ? data.parameterOrder
+    : campaign.parameterOrder || [];
+  let headerImageId: string | undefined = data?.headerImageId || campaign.headerImageId;
+
+  if (!headerImageId) {
+    const priorMessage = await db.collection("whatsapp_messages").findOne(
+      {
+        campaignId: campaign._id.toString(),
+        "payload.headerImageId": { $exists: true, $ne: "" }
+      },
+      { projection: { "payload.headerImageId": 1 } }
+    );
+    headerImageId = priorMessage?.payload?.headerImageId;
+  }
+
+  const template = await getTemplateDetails({ db, templateName, language });
+
+  if (!parameterOrder.length && Array.isArray(template?.parameters)) {
+    parameterOrder = template.parameters
+      .map((parameter: { name?: string }) => parameter.name)
+      .filter((name): name is string => Boolean(name));
+  }
+
+  contactFieldMappings = addDefaultContactFieldMappings({
+    parameterOrder,
+    parameters,
+    contactFieldMappings
+  });
+
+  if (template?.headerFormat === "IMAGE" && !headerImageId) {
+    throw new Error(
+      "This campaign needs its original header image. Upload and resend as a new campaign, or contact support to recover the media id."
+    );
+  }
+
+  return {
+    templateName,
+    language,
+    parameters,
+    contactFieldMappings,
+    parameterOrder,
+    parameterFormat:
+      (template?.parameterFormat as "NAMED" | "POSITIONAL") || "NAMED",
+    headerImageId
+  };
+}
+
+export type CampaignSendResult = {
+  ok: boolean;
+  messageId?: string;
+  errorMessage?: string;
+  messageStatus?: string;
+};
+
+/**
+ * Sends one template message to a recipient and records the outbound
+ * `whatsapp_messages` doc (tagged with retry metadata when this is a retry).
+ * Returns the Meta message id + any error so the caller can update recipient
+ * state. Used by both the campaign batch loop and the retry dispatcher.
+ */
+export async function sendCampaignMessage({
+  db,
+  campaignId,
+  context,
+  recipient,
+  retry
+}: {
+  db: Db;
+  campaignId: string;
+  context: CampaignSendContext;
+  recipient: { name: string; phone: string };
+  retry?: { attemptId: string; attemptNumber: number };
+}): Promise<CampaignSendResult> {
+  const resolvedParameters = resolveParametersForRecipient({
+    parameters: context.parameters,
+    contactFieldMappings: context.contactFieldMappings,
+    recipient: recipient as Recipient
+  });
+
+  const response = await sendTemplate({
+    to: recipient.phone,
+    templateName: context.templateName,
+    language: context.language,
+    parameters: resolvedParameters,
+    parameterOrder: context.parameterOrder,
+    parameterFormat: context.parameterFormat,
+    headerImageId: context.headerImageId
+  });
+
+  const message = response.result?.messages?.[0];
+  if (message?.id) {
+    await db.collection("whatsapp_messages").updateOne(
+      { messageId: message.id },
+      {
+        $setOnInsert: {
+          messageId: message.id,
+          direction: "outbound",
+          from: process.env.WHATSAPP_PHONE_NUMBER_ID,
+          to: recipient.phone,
+          contactName: recipient.name,
+          type: "template",
+          templateName: context.templateName,
+          text: context.templateName,
+          payload: {
+            templateName: context.templateName,
+            language: context.language,
+            parameters: resolvedParameters,
+            contactFieldMappings: context.contactFieldMappings,
+            headerImageId: context.headerImageId
+          },
+          campaignId,
+          ...(retry
+            ? { retryAttemptId: retry.attemptId, attemptNumber: retry.attemptNumber }
+            : {}),
+          createdAt: new Date()
+        },
+        $set: {
+          lastStatus: message.message_status || "accepted",
+          updatedAt: new Date()
+        }
+      },
+      { upsert: true }
+    );
+  }
+
+  const errorMessage = response.ok
+    ? undefined
+    : response.result?.error?.message || JSON.stringify(response.result);
+
+  return {
+    ok: response.ok,
+    messageId: message?.id,
+    errorMessage,
+    messageStatus: message?.message_status
+  };
 }
 
 /**
@@ -372,124 +551,35 @@ export async function processCampaignBatch({
     };
   }
 
-  const templateName = data.templateName || campaign.templateName;
-  const language = data.language || campaign.language;
-  const parameters = Object.keys(data.parameters || {}).length
-    ? data.parameters
-    : campaign.parameters;
-  let contactFieldMappings = Object.keys(data.contactFieldMappings || {}).length
-    ? data.contactFieldMappings
-    : campaign.contactFieldMappings || {};
-  let parameterOrder = data.parameterOrder?.length
-    ? data.parameterOrder
-    : campaign.parameterOrder || [];
-  let headerImageId = data.headerImageId || campaign.headerImageId;
-
-  if (!headerImageId) {
-    const priorMessage = await db.collection("whatsapp_messages").findOne(
-      {
-        campaignId: campaignId.toString(),
-        "payload.headerImageId": { $exists: true, $ne: "" }
-      },
-      { projection: { "payload.headerImageId": 1 } }
-    );
-    headerImageId = priorMessage?.payload?.headerImageId;
-  }
-
-  const template = await getTemplateDetails({ db, templateName, language });
-
-  if (!parameterOrder.length && Array.isArray(template?.parameters)) {
-    parameterOrder = template.parameters
-      .map((parameter: { name?: string }) => parameter.name)
-      .filter((name): name is string => Boolean(name));
-  }
-
-  contactFieldMappings = addDefaultContactFieldMappings({
-    parameterOrder,
-    parameters,
-    contactFieldMappings
-  });
-
-  if (template?.headerFormat === "IMAGE" && !headerImageId) {
-    throw new Error(
-      "This campaign needs its original header image. Upload and resend as a new campaign, or contact support to recover the media id."
-    );
-  }
+  const context = await resolveCampaignSendContext({ db, campaign, data });
   let current: Record<string, unknown> | undefined;
 
   for (const { recipient, index } of batchIndexes) {
-    const resolvedParameters = resolveParametersForRecipient({
-      parameters,
-      contactFieldMappings,
+    const sent = await sendCampaignMessage({
+      db,
+      campaignId: campaignId.toString(),
+      context,
       recipient
     });
 
-    const response = await sendTemplate({
-      to: recipient.phone,
-      templateName,
-      language,
-      parameters: resolvedParameters,
-      parameterOrder,
-      parameterFormat:
-        (template?.parameterFormat as "NAMED" | "POSITIONAL") || "NAMED",
-      headerImageId
-    });
-
-    const message = response.result?.messages?.[0];
-    if (message?.id) {
-      await db.collection("whatsapp_messages").updateOne(
-        { messageId: message.id },
-        {
-          $setOnInsert: {
-            messageId: message.id,
-            direction: "outbound",
-            from: process.env.WHATSAPP_PHONE_NUMBER_ID,
-            to: recipient.phone,
-            contactName: recipient.name,
-            type: "template",
-            templateName,
-            text: templateName,
-            payload: {
-              templateName,
-              language,
-              parameters: resolvedParameters,
-              contactFieldMappings,
-              headerImageId
-            },
-            campaignId: campaignId.toString(),
-            createdAt: new Date()
-          },
-          $set: {
-            lastStatus: message.message_status || "accepted",
-            updatedAt: new Date()
-          }
-        },
-        { upsert: true }
-      );
-    }
-
-    const errorMessage = response.ok
-      ? undefined
-      : response.result?.error?.message || JSON.stringify(response.result);
-
-    if (!response.ok && isTemplateConfigurationError(errorMessage)) {
+    if (!sent.ok && isTemplateConfigurationError(sent.errorMessage)) {
       throw new Error(
-        `Campaign resume stopped before sending more recipients: ${errorMessage}`
+        `Campaign resume stopped before sending more recipients: ${sent.errorMessage}`
       );
     }
 
     recipients[index] = {
       ...recipient,
-      status: response.ok ? "accepted" : "failed",
-      messageId: message?.id,
-      error: errorMessage
+      status: sent.ok ? "accepted" : "failed",
+      messageId: sent.messageId,
+      error: sent.errorMessage
     };
 
     current = {
       name: recipient.name,
       phone: recipient.phone,
       status: recipients[index].status,
-      error: errorMessage
+      error: sent.errorMessage
     };
   }
 

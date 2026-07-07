@@ -60,3 +60,13 @@ Webhook POSTs are stored in MongoDB collections:
 - `whatsapp_template_events`
 
 The dashboard Inbox tab reads from those collections.
+
+## Scheduled sending & retries
+
+A single cron job drives both scheduled campaign sending and automatic retries.
+Point cron-job.org at `POST /api/cron/campaigns` every minute with an
+`Authorization: Bearer $CRON_SECRET` header.
+
+`CRON_SECRET` (and optional `RETRY_MAX_ATTEMPTS`, default 3) gate the retry
+dispatcher. See [docs/retry-failed-deliveries.md](docs/retry-failed-deliveries.md)
+for the retry feature — architecture, metrics, API, and cron-job.org setup.
