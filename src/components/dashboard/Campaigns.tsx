@@ -1,12 +1,14 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { AnimatePresence, motion } from "motion/react";
 import {
   ArrowLeft,
   CalendarClock,
+  Clock3,
   Loader2,
   Plus,
+  RefreshCw,
   Search,
   Send,
   Upload,
@@ -36,11 +38,22 @@ import {
   SelectTrigger,
   SelectValue
 } from "@/components/ui/select";
+import { Switch } from "@/components/ui/switch";
 import { staggerContainer } from "@/lib/motion";
 import { cn } from "@/lib/utils";
 import { CampaignLiveList } from "./CampaignLiveList";
 import { Section } from "./Section";
 import type { CampaignProgress, WhatsAppMessage } from "./types";
+
+const RETRY_INTERVAL_HOURS = 24;
+const RETRY_INTERVAL_MS = RETRY_INTERVAL_HOURS * 60 * 60 * 1000;
+const MAX_RETRY_ATTEMPTS = 3;
+
+function toLocalInput(date: Date): string {
+  return new Date(date.getTime() - date.getTimezoneOffset() * 60_000)
+    .toISOString()
+    .slice(0, 16);
+}
 
 export function Campaigns(props: {
   campaigns: Campaign[];
@@ -62,6 +75,14 @@ export function Campaigns(props: {
   setCampaignName: (value: string) => void;
   scheduledAt: string;
   setScheduledAt: (value: string) => void;
+  retryPlanningEnabled: boolean;
+  setRetryPlanningEnabled: (value: boolean) => void;
+  retryMode: "once" | "automatic";
+  setRetryMode: (value: "once" | "automatic") => void;
+  retryRelevantUntil: string;
+  setRetryRelevantUntil: (value: string) => void;
+  retryMaxRetries: number;
+  setRetryMaxRetries: (value: number) => void;
   parameterValues: Record<string, string>;
   setParameterValues: (value: Record<string, string>) => void;
   contactFieldMappings: Record<string, ContactTemplateField>;
@@ -91,9 +112,41 @@ export function Campaigns(props: {
     !Number.isNaN(scheduleTime.getTime()) &&
     scheduleTime.getTime() > Date.now();
   const sendNowBlockedBySchedule = scheduleIsValid;
+  const retryStartAt = scheduleIsValid && scheduleTime ? scheduleTime : new Date();
+  const firstRetryAt = new Date(retryStartAt.getTime() + RETRY_INTERVAL_MS);
+  const minRetryRelevantUntil = toLocalInput(firstRetryAt);
+  const retryRelevantDate = props.retryRelevantUntil
+    ? new Date(props.retryRelevantUntil)
+    : null;
+  const retryRelevantIsValid =
+    !props.retryPlanningEnabled ||
+    (!!retryRelevantDate &&
+      !Number.isNaN(retryRelevantDate.getTime()) &&
+      retryRelevantDate.getTime() >= firstRetryAt.getTime());
+  const automaticRetryCount =
+    retryRelevantDate && retryRelevantDate.getTime() >= firstRetryAt.getTime()
+      ? Math.min(
+          MAX_RETRY_ATTEMPTS,
+          Math.floor(
+            (retryRelevantDate.getTime() - firstRetryAt.getTime()) /
+              RETRY_INTERVAL_MS
+          ) + 1
+        )
+      : 0;
+  const plannedRetryCount = props.retryPlanningEnabled
+    ? props.retryMode === "once"
+      ? retryRelevantIsValid
+        ? 1
+        : 0
+      : Math.min(Math.max(props.retryMaxRetries, 1), automaticRetryCount)
+    : 0;
+  const retryPreview = Array.from({ length: plannedRetryCount }, (_, index) =>
+    new Date(firstRetryAt.getTime() + index * RETRY_INTERVAL_MS)
+  );
   const blocked =
     props.recipientCount === 0 ||
-    (props.selectedTemplate.headerFormat === "IMAGE" && !props.headerImageId);
+    (props.selectedTemplate.headerFormat === "IMAGE" && !props.headerImageId) ||
+    !retryRelevantIsValid;
   // Earliest selectable time as a *local* wall-clock string (datetime-local
   // ignores timezone), so the floor lines up with the admin's clock (e.g. IST).
   const minSchedule = (() => {
@@ -111,6 +164,26 @@ export function Campaigns(props: {
 
   const [view, setView] = useState<"list" | "builder">("list");
   const [campaignSearch, setCampaignSearch] = useState("");
+
+  useEffect(() => {
+    if (!props.retryPlanningEnabled) return;
+    if (
+      !retryRelevantDate ||
+      Number.isNaN(retryRelevantDate.getTime()) ||
+      retryRelevantDate.getTime() < firstRetryAt.getTime()
+    ) {
+      props.setRetryRelevantUntil(
+        toLocalInput(new Date(firstRetryAt.getTime() + RETRY_INTERVAL_MS))
+      );
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [props.retryPlanningEnabled, props.scheduledAt]);
+
+  useEffect(() => {
+    if (!props.retryPlanningEnabled || props.retryMode !== "automatic") return;
+    props.setRetryMaxRetries(Math.max(1, automaticRetryCount || 1));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [props.retryPlanningEnabled, props.retryMode, automaticRetryCount]);
 
   // A live send owns the screen — always show the builder so the admin can watch
   // delivery land and cancel if needed.
@@ -326,6 +399,168 @@ export function Campaigns(props: {
               })}
             </div>
           ) : null}
+
+          <div className="grid gap-3 rounded-lg border border-moon-green/12 bg-muted/40 p-3.5">
+            <div className="flex flex-wrap items-start justify-between gap-3">
+              <div className="flex items-start gap-2">
+                <RefreshCw className="mt-0.5 h-4 w-4 text-moon-green" />
+                <div>
+                  <Label htmlFor="retry-plan" className="text-sm">
+                    Retry failed deliveries
+                  </Label>
+                  <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
+                    Some Meta 131049 failures may become eligible later. Retries
+                    run every 24 hours and delivery is not guaranteed.
+                  </p>
+                </div>
+              </div>
+              <Switch
+                id="retry-plan"
+                checked={props.retryPlanningEnabled}
+                onCheckedChange={props.setRetryPlanningEnabled}
+                aria-label="Enable retry plan"
+              />
+            </div>
+
+            {props.retryPlanningEnabled ? (
+              <div className="grid gap-3">
+                <div className="flex flex-wrap gap-2">
+                  <Badge variant="secondary" className="gap-1">
+                    <Clock3 className="h-3.5 w-3.5" />
+                    Every 24h
+                  </Badge>
+                  <Badge variant="outline">
+                    {plannedRetryCount
+                      ? `${plannedRetryCount} planned ${
+                          plannedRetryCount === 1 ? "retry" : "retries"
+                        }`
+                      : "Needs event date"}
+                  </Badge>
+                </div>
+
+                <div className="grid gap-2">
+                  <Label htmlFor="retry-relevant-until">
+                    Event relevant until
+                  </Label>
+                  <Input
+                    id="retry-relevant-until"
+                    type="datetime-local"
+                    value={props.retryRelevantUntil}
+                    min={minRetryRelevantUntil}
+                    onChange={(event) =>
+                      props.setRetryRelevantUntil(event.target.value)
+                    }
+                  />
+                  <p className="text-xs text-muted-foreground">
+                    Use retries only when the campaign will remain relevant for at
+                    least another 24 hours.
+                  </p>
+                </div>
+
+                <div className="grid gap-2 sm:grid-cols-2">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      props.setRetryMode("once");
+                      props.setRetryMaxRetries(1);
+                    }}
+                    className={cn(
+                      "rounded-lg border px-3 py-2 text-left text-sm transition-colors",
+                      props.retryMode === "once"
+                        ? "border-moon-green bg-moon-green text-moon-paper"
+                        : "border-moon-green/18 bg-card text-moon-ink hover:bg-moon-cream/50"
+                    )}
+                  >
+                    <span className="font-medium">Retry once</span>
+                    <span className="mt-1 block text-xs opacity-75">
+                      Best for campaigns ending soon.
+                    </span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => props.setRetryMode("automatic")}
+                    className={cn(
+                      "rounded-lg border px-3 py-2 text-left text-sm transition-colors",
+                      props.retryMode === "automatic"
+                        ? "border-moon-green bg-moon-green text-moon-paper"
+                        : "border-moon-green/18 bg-card text-moon-ink hover:bg-moon-cream/50"
+                    )}
+                  >
+                    <span className="font-medium">Auto calculate</span>
+                    <span className="mt-1 block text-xs opacity-75">
+                      Fits retries before the relevancy date.
+                    </span>
+                  </button>
+                </div>
+
+                {props.retryMode === "automatic" ? (
+                  <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-moon-green/12 bg-card px-3 py-2">
+                    <div>
+                      <p className="text-sm font-medium text-moon-ink">
+                        Retry attempts
+                      </p>
+                      <p className="text-xs text-muted-foreground">
+                        Auto-set from the event date, capped at {MAX_RETRY_ATTEMPTS}.
+                      </p>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="icon"
+                        className="h-8 w-8"
+                        onClick={() =>
+                          props.setRetryMaxRetries(
+                            Math.max(1, props.retryMaxRetries - 1)
+                          )
+                        }
+                        disabled={props.retryMaxRetries <= 1}
+                      >
+                        -
+                      </Button>
+                      <span className="w-8 text-center text-sm font-semibold">
+                        {Math.max(1, props.retryMaxRetries)}
+                      </span>
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="icon"
+                        className="h-8 w-8"
+                        onClick={() =>
+                          props.setRetryMaxRetries(
+                            Math.min(
+                              MAX_RETRY_ATTEMPTS,
+                              props.retryMaxRetries + 1
+                            )
+                          )
+                        }
+                        disabled={
+                          props.retryMaxRetries >=
+                          Math.max(1, automaticRetryCount || 1)
+                        }
+                      >
+                        +
+                      </Button>
+                    </div>
+                  </div>
+                ) : null}
+
+                {retryPreview.length ? (
+                  <div className="grid gap-1 text-xs text-muted-foreground">
+                    {retryPreview.map((date, index) => (
+                      <span key={date.toISOString()}>
+                        Retry #{index + 1}: {date.toLocaleString()}
+                      </span>
+                    ))}
+                  </div>
+                ) : (
+                  <p className="text-xs font-medium text-moon-red">
+                    Pick an event date after {firstRetryAt.toLocaleString()}.
+                  </p>
+                )}
+              </div>
+            ) : null}
+          </div>
 
           <Button
             type="button"

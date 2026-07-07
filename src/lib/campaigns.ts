@@ -3,6 +3,8 @@ import { ObjectId, type Db, type Document } from "mongodb";
 import { getDb } from "@/lib/mongodb";
 import { graphGet, sendTemplate } from "@/lib/whatsapp";
 import { extractTemplate, type MetaTemplate } from "@/lib/whatsapp/templates";
+import { RETRY_INTERVAL_MS, getMaxRetriesCap } from "@/lib/retries/constants";
+import { upsertPolicy } from "@/lib/retries/policy";
 
 export const sendSchema = z.object({
   name: z.string().min(1).optional(),
@@ -16,6 +18,15 @@ export const sendSchema = z.object({
   contactIds: z.array(z.string()).default([]),
   campaignId: z.string().optional(),
   scheduledAt: z.string().datetime().optional(),
+  retryPolicy: z
+    .object({
+      enabled: z.boolean().default(true),
+      mode: z.enum(["once", "automatic"]).default("automatic"),
+      relevantUntil: z.string().datetime(),
+      maxRetries: z.number().int().min(1).optional(),
+      timezone: z.string().optional()
+    })
+    .optional(),
   batchSize: z.number().int().min(1).max(100).default(25)
 });
 
@@ -91,6 +102,39 @@ function addDefaultContactFieldMappings({
     nextMappings.name = "name";
   }
   return nextMappings;
+}
+
+function getInitialRetryPolicy({
+  data,
+  startsAt
+}: {
+  data: CampaignSendData;
+  startsAt: Date;
+}) {
+  if (!data.retryPolicy?.enabled) return null;
+
+  const relevantUntil = new Date(data.retryPolicy.relevantUntil);
+  if (Number.isNaN(relevantUntil.getTime())) {
+    throw new Error("Pick a valid retry relevancy date");
+  }
+
+  const firstEligibleAt = new Date(startsAt.getTime() + RETRY_INTERVAL_MS);
+  if (relevantUntil.getTime() < firstEligibleAt.getTime()) {
+    throw new Error(
+      `Retries need at least 24 hours. Pick a relevancy date after ${firstEligibleAt.toLocaleString()}.`
+    );
+  }
+
+  const mode = data.retryPolicy.mode;
+  const requestedMax =
+    mode === "once" ? 1 : data.retryPolicy.maxRetries ?? getMaxRetriesCap();
+
+  return {
+    mode,
+    relevantUntil,
+    requestedMax,
+    firstEligibleAt
+  };
 }
 
 async function refreshTemplateFromMeta({
@@ -399,6 +443,10 @@ export async function createCampaign({
   });
 
   const now = new Date();
+  const initialRetryPolicy = getInitialRetryPolicy({
+    data,
+    startsAt: scheduledAt ?? now
+  });
   const result = await db.collection("campaigns").insertOne({
     name: data.name,
     templateName: data.templateName,
@@ -422,6 +470,17 @@ export async function createCampaign({
     createdAt: now,
     updatedAt: now
   });
+
+  if (initialRetryPolicy) {
+    await upsertPolicy({
+      campaignId: result.insertedId.toString(),
+      mode: initialRetryPolicy.mode,
+      relevantUntil: initialRetryPolicy.relevantUntil,
+      requestedMax: initialRetryPolicy.requestedMax,
+      firstEligibleAt: initialRetryPolicy.firstEligibleAt,
+      createdBy: userId
+    });
+  }
 
   return result.insertedId;
 }

@@ -45,6 +45,28 @@ function recipientFilter(recipient: {
     : { "r.phone": recipient.phone };
 }
 
+function hasPendingRetryOutcomes(recipients: Array<Record<string, unknown>>): boolean {
+  return recipients.some((recipient) => {
+    const status = recipient.status;
+    const lastStatus = recipient.lastStatus;
+    if (status === "queued") return true;
+    if (status !== "accepted") return false;
+    return lastStatus !== "delivered" && lastStatus !== "read" && lastStatus !== "failed";
+  });
+}
+
+function nextRetryableTime(
+  retryable: Array<Record<string, unknown>>,
+  fallback: Date
+): Date {
+  const times = retryable
+    .map((recipient) => toDate(recipient.nextRetryAt as Date | string | undefined))
+    .filter((date): date is Date => Boolean(date));
+  return times.length
+    ? new Date(Math.min(...times.map((date) => date.getTime())))
+    : fallback;
+}
+
 async function completePolicy(
   policies: Collection<RetryPolicyDoc>,
   id: ObjectId
@@ -192,6 +214,61 @@ async function processPolicy({
   }
 
   if (policy.attemptsMade >= policy.maxRetries) {
+    await completePolicy(policies, policy._id);
+    return outcome;
+  }
+
+  const currentRecipients: Array<Record<string, unknown>> = Array.isArray(
+    campaign.recipients
+  )
+    ? campaign.recipients
+    : [];
+  const retryable = getRetryableFailures(
+    { recipients: currentRecipients },
+    policy.maxRetries
+  ) as Array<Record<string, unknown>>;
+  const dueNow = getDueRetryRecipients(
+    { recipients: currentRecipients },
+    policy.maxRetries,
+    new Date(),
+    policy.retryIntervalHours
+  );
+
+  if (!dueNow.length) {
+    if (retryable.length) {
+      await policies.updateOne(
+        { _id: policy._id },
+        {
+          $set: {
+            cachedNextRetryAt: nextRetryableTime(
+              retryable,
+              new Date(Date.now() + RETRY_INTERVAL_MS)
+            ),
+            ...release
+          }
+        }
+      );
+      return outcome;
+    }
+
+    if (hasPendingRetryOutcomes(currentRecipients)) {
+      await policies.updateOne(
+        { _id: policy._id },
+        {
+          $set: {
+            cachedNextRetryAt: new Date(
+              Math.min(
+                Date.now() + 60 * 60_000,
+                new Date(policy.relevantUntil).getTime()
+              )
+            ),
+            ...release
+          }
+        }
+      );
+      return outcome;
+    }
+
     await completePolicy(policies, policy._id);
     return outcome;
   }
@@ -450,7 +527,36 @@ async function processPolicy({
     { $set: { status: "queued", completedAt: new Date(), updatedAt: new Date() } }
   );
 
-  if (attemptsMade >= policy.maxRetries || stillRetryable.length === 0) {
+  const afterRecipients: Array<Record<string, unknown>> = Array.isArray(
+    after?.recipients
+  )
+    ? after!.recipients
+    : [];
+  if (attemptsMade >= policy.maxRetries) {
+    await completePolicy(policies, policy._id);
+    await policies.updateOne(
+      { _id: policy._id },
+      { $set: { attemptsMade } }
+    );
+    return outcome;
+  }
+
+  if (stillRetryable.length === 0 && hasPendingRetryOutcomes(afterRecipients)) {
+    await policies.updateOne(
+      { _id: policy._id },
+      {
+        $set: {
+          attemptsMade,
+          activeAttemptNumber: null,
+          cachedNextRetryAt: new Date(Date.now() + RETRY_INTERVAL_MS),
+          ...release
+        }
+      }
+    );
+    return outcome;
+  }
+
+  if (stillRetryable.length === 0) {
     await completePolicy(policies, policy._id);
     await policies.updateOne(
       { _id: policy._id },

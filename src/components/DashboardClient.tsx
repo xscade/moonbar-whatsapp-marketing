@@ -81,6 +81,10 @@ export function DashboardClient({ user }: DashboardClientProps) {
   const [selectedTemplateName, setSelectedTemplateName] = useState("event_details_reminder_1");
   const [campaignName, setCampaignName] = useState("Weekend event reminder");
   const [scheduledAt, setScheduledAt] = useState("");
+  const [retryPlanningEnabled, setRetryPlanningEnabled] = useState(false);
+  const [retryMode, setRetryMode] = useState<"once" | "automatic">("automatic");
+  const [retryRelevantUntil, setRetryRelevantUntil] = useState("");
+  const [retryMaxRetries, setRetryMaxRetries] = useState(1);
   const [headerImageId, setHeaderImageId] = useState("");
   const [headerImageName, setHeaderImageName] = useState("");
   const [parameterValues, setParameterValues] = useState<Record<string, string>>({
@@ -759,6 +763,41 @@ export function DashboardClient({ user }: DashboardClientProps) {
     }
   }
 
+  function getRetryPolicyPayload(startAt?: Date) {
+    if (!retryPlanningEnabled) return { payload: undefined, error: "" };
+
+    if (!retryRelevantUntil) {
+      return {
+        payload: undefined,
+        error: "Pick when the campaign stops being relevant before enabling retries."
+      };
+    }
+
+    const relevantUntil = new Date(retryRelevantUntil);
+    if (Number.isNaN(relevantUntil.getTime())) {
+      return { payload: undefined, error: "Pick a valid retry relevancy date." };
+    }
+
+    const firstRetryAt = new Date((startAt?.getTime() ?? Date.now()) + 24 * 3600_000);
+    if (relevantUntil.getTime() < firstRetryAt.getTime()) {
+      return {
+        payload: undefined,
+        error: `Retries need at least 24 hours. Pick a relevancy date after ${firstRetryAt.toLocaleString()}.`
+      };
+    }
+
+    return {
+      payload: {
+        enabled: true,
+        mode: retryMode,
+        relevantUntil: relevantUntil.toISOString(),
+        maxRetries: retryMode === "once" ? 1 : retryMaxRetries,
+        timezone: Intl.DateTimeFormat().resolvedOptions().timeZone
+      },
+      error: ""
+    };
+  }
+
   async function sendCampaign() {
     if (sendCampaignInFlightRef.current) return;
 
@@ -779,6 +818,12 @@ export function DashboardClient({ user }: DashboardClientProps) {
       chosenSchedule.getTime() > Date.now()
     ) {
       setNotice("Clear the scheduled time to send immediately, or use Schedule.");
+      return;
+    }
+
+    const retryPolicy = getRetryPolicyPayload();
+    if (retryPolicy.error) {
+      setNotice(retryPolicy.error);
       return;
     }
 
@@ -803,6 +848,7 @@ export function DashboardClient({ user }: DashboardClientProps) {
         headerImageId,
         listIds: Array.from(selectedListIds),
         contactIds: Array.from(selectedContactIds),
+        ...(retryPolicy.payload ? { retryPolicy: retryPolicy.payload } : {}),
         batchSize: 10
       };
 
@@ -878,6 +924,12 @@ export function DashboardClient({ user }: DashboardClientProps) {
       return;
     }
 
+    const retryPolicy = getRetryPolicyPayload(when);
+    if (retryPolicy.error) {
+      setNotice(retryPolicy.error);
+      return;
+    }
+
     scheduleCampaignInFlightRef.current = true;
     setBusy("schedule");
     try {
@@ -893,7 +945,8 @@ export function DashboardClient({ user }: DashboardClientProps) {
           headerImageId,
           listIds: Array.from(selectedListIds),
           contactIds: Array.from(selectedContactIds),
-          scheduledAt: when.toISOString()
+          scheduledAt: when.toISOString(),
+          ...(retryPolicy.payload ? { retryPolicy: retryPolicy.payload } : {})
         })
       });
       await refreshAll();
@@ -1331,6 +1384,14 @@ export function DashboardClient({ user }: DashboardClientProps) {
           setCampaignName={setCampaignName}
           scheduledAt={scheduledAt}
           setScheduledAt={setScheduledAt}
+          retryPlanningEnabled={retryPlanningEnabled}
+          setRetryPlanningEnabled={setRetryPlanningEnabled}
+          retryMode={retryMode}
+          setRetryMode={setRetryMode}
+          retryRelevantUntil={retryRelevantUntil}
+          setRetryRelevantUntil={setRetryRelevantUntil}
+          retryMaxRetries={retryMaxRetries}
+          setRetryMaxRetries={setRetryMaxRetries}
           parameterValues={parameterValues}
           setParameterValues={setParameterValues}
           contactFieldMappings={contactFieldMappings}

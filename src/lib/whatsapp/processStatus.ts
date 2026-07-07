@@ -98,17 +98,34 @@ export async function processStatuses(
       };
 
       if (isFailed) {
+        const retryableFailure = isRetryableErrorCode(errorCode);
+        const nextRetryAt = retryableFailure
+          ? new Date(statusAt.getTime() + RETRY_INTERVAL_MS)
+          : null;
         // Capture the structured failure so eligibility can gate on 131049 and
         // arm the per-recipient 24h clock for the next retry wave.
         recipientSet["recipients.$[recipient].errorCode"] =
           typeof errorCode === "number" ? errorCode : null;
         recipientSet["recipients.$[recipient].errorTitle"] = errorTitle ?? null;
         recipientSet["recipients.$[recipient].failedAt"] = statusAt;
-        recipientSet["recipients.$[recipient].nextRetryAt"] = isRetryableErrorCode(
-          errorCode
-        )
-          ? new Date(statusAt.getTime() + RETRY_INTERVAL_MS)
-          : null;
+        recipientSet["recipients.$[recipient].nextRetryAt"] = nextRetryAt;
+
+        if (nextRetryAt) {
+          await db.collection("campaign_retry_policies").updateOne(
+            {
+              campaignId: campaignIdStr,
+              enabled: true,
+              status: "active",
+              relevantUntil: { $gt: now },
+              $or: [
+                { cachedNextRetryAt: null },
+                { cachedNextRetryAt: { $exists: false } },
+                { cachedNextRetryAt: { $gt: nextRetryAt } }
+              ]
+            },
+            { $set: { cachedNextRetryAt: nextRetryAt, updatedAt: now } }
+          );
+        }
       }
 
       const byMessageId = await db.collection("campaigns").updateOne(
