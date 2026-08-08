@@ -1351,6 +1351,7 @@ export function DashboardClient({ user }: DashboardClientProps) {
           onResume={resumeCampaign}
           onCancel={cancelCampaign}
           onOpenRetry={openRetry}
+          onRetryChanged={refreshCampaigns}
         />
       ) : null}
 
@@ -1383,6 +1384,7 @@ export function DashboardClient({ user }: DashboardClientProps) {
           onResume={resumeCampaign}
           onCancelCampaign={cancelCampaign}
           onOpenRetry={openRetry}
+          onRetryChanged={refreshCampaigns}
           contacts={filteredContacts}
           allContacts={contacts}
           lists={lists}
@@ -1475,6 +1477,7 @@ export function DashboardClient({ user }: DashboardClientProps) {
           onResume={resumeCampaign}
           onCancel={cancelCampaign}
           onOpenRetry={openRetry}
+          onRetryChanged={refreshCampaigns}
         />
       ) : null}
 

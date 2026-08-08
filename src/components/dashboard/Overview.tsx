@@ -90,7 +90,8 @@ export function Overview({
   onRefresh,
   onResume,
   onCancel,
-  onOpenRetry
+  onOpenRetry,
+  onRetryChanged
 }: {
   stats: Record<string, number>;
   campaigns: Campaign[];
@@ -101,6 +102,7 @@ export function Overview({
   onResume: (campaign: Campaign) => void;
   onCancel: (campaign: Campaign) => void;
   onOpenRetry?: (campaign: Campaign) => void;
+  onRetryChanged?: () => void;
 }) {
   const [selectedTemplateFilter, setSelectedTemplateFilter] = React.useState("all");
 
@@ -404,6 +406,7 @@ export function Overview({
           onResume={onResume}
           onCancel={onCancel}
           onOpenRetry={onOpenRetry}
+          onRetryChanged={onRetryChanged}
           compact
         />
       </Section>

@@ -15,13 +15,15 @@ export function Reports({
   busy,
   onResume,
   onCancel,
-  onOpenRetry
+  onOpenRetry,
+  onRetryChanged
 }: {
   campaigns: Campaign[];
   busy: string;
   onResume: (campaign: Campaign) => void;
   onCancel: (campaign: Campaign) => void;
   onOpenRetry?: (campaign: Campaign) => void;
+  onRetryChanged?: () => void;
 }) {
   const totals = React.useMemo(() => {
     return campaigns.reduce(
@@ -106,6 +108,7 @@ export function Reports({
           onResume={onResume}
           onCancel={onCancel}
           onOpenRetry={onOpenRetry}
+          onRetryChanged={onRetryChanged}
         />
       </Section>
     </motion.div>

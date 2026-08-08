@@ -1,7 +1,8 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import { AlertCircle, RefreshCw } from "lucide-react";
+import { toast } from "sonner";
+import { AlertCircle, Loader2, RefreshCw, X } from "lucide-react";
 
 import type { Campaign, RetryAttempt, RetryPolicy } from "@/types/entities";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -38,6 +39,9 @@ type DisplayRow = {
   status: string;
   awaiting?: boolean;
   scheduled?: boolean;
+  /** Set on retry rows so a still-scheduled attempt can be cancelled from here. */
+  attemptNumber?: number;
+  cancellable?: boolean;
 };
 
 function attemptRecovery(attempt: RetryAttempt): {
@@ -90,7 +94,11 @@ function buildRows(campaign: Campaign, data: RetryAttemptsResponse): DisplayRow[
       status:
         attempt.status === "queued" || attempt.status === "processing"
           ? "In progress"
-          : attempt.status.charAt(0).toUpperCase() + attempt.status.slice(1)
+          : attempt.status.charAt(0).toUpperCase() + attempt.status.slice(1),
+      attemptNumber: attempt.attemptNumber,
+      // The dispatcher creates attempts already "processing", but a persisted
+      // "scheduled" attempt has not been sent yet and can still be called off.
+      cancellable: attempt.status === "scheduled"
     });
   }
 
@@ -117,7 +125,9 @@ function buildRows(campaign: Campaign, data: RetryAttemptsResponse): DisplayRow[
         pending: "—",
         recovery: "—",
         status: "Scheduled",
-        scheduled: true
+        scheduled: true,
+        attemptNumber,
+        cancellable: true
       });
     }
     void done;
@@ -139,14 +149,18 @@ function SummaryCard({ label, value }: { label: string; value: string }) {
 
 export function RetryMetricsAccordion({
   campaign,
-  open
+  open,
+  onChanged
 }: {
   campaign: Campaign;
   open: boolean;
+  /** Lets the campaigns list refresh its retry chip after a cancellation. */
+  onChanged?: () => void;
 }) {
   const [data, setData] = useState<RetryAttemptsResponse | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [cancelling, setCancelling] = useState<number | null>(null);
 
   const load = useCallback(async () => {
     try {
@@ -182,6 +196,49 @@ export function RetryMetricsAccordion({
     const timer = setInterval(load, 20_000);
     return () => clearInterval(timer);
   }, [open, isProcessing, load]);
+
+  /**
+   * Cancels a scheduled retry from the table. Attempt numbers are consecutive
+   * and derived from `attemptsMade`, so a later attempt cannot survive an
+   * earlier one being dropped — cancelling attempt N always drops N and every
+   * attempt after it. Dropping the earliest remaining attempt therefore means
+   * the whole future schedule goes, which is the policy-level cancel; dropping
+   * a later one just trims the cap so the earlier retries still run.
+   */
+  async function cancelScheduled(attemptNumber: number, isEarliest: boolean) {
+    const confirmed = window.confirm(
+      isEarliest
+        ? "Cancel all scheduled retries for this campaign? Completed retries stay in your history."
+        : `Cancel retry #${attemptNumber} and any later attempts? Earlier scheduled retries will still run.`
+    );
+    if (!confirmed) return;
+
+    setCancelling(attemptNumber);
+    try {
+      await apiFetch(
+        `/api/campaigns/${campaign._id}/retry-policy`,
+        isEarliest
+          ? { method: "DELETE" }
+          : {
+              method: "PATCH",
+              body: JSON.stringify({ maxRetries: attemptNumber - 1 })
+            }
+      );
+      toast.success(
+        isEarliest
+          ? "Scheduled retries cancelled"
+          : `Retry #${attemptNumber} and later attempts cancelled`
+      );
+      await load();
+      onChanged?.();
+    } catch (err) {
+      toast.error(
+        err instanceof Error ? err.message : "Could not cancel the scheduled retry"
+      );
+    } finally {
+      setCancelling(null);
+    }
+  }
 
   if (!open) return null;
 
@@ -223,6 +280,17 @@ export function RetryMetricsAccordion({
 
   const rows = buildRows(campaign, data);
   const policy = data.policy;
+  // The earliest still-scheduled attempt — cancelling it cancels the whole
+  // remaining schedule rather than just trimming the tail.
+  const earliestCancellable = rows.reduce<number | null>(
+    (lowest, row) =>
+      row.cancellable && row.attemptNumber !== undefined
+        ? lowest === null
+          ? row.attemptNumber
+          : Math.min(lowest, row.attemptNumber)
+        : lowest,
+    null
+  );
 
   return (
     <div className="space-y-4 p-4">
@@ -265,6 +333,9 @@ export function RetryMetricsAccordion({
               <th className="px-3 py-2 text-right font-medium">Failed</th>
               <th className="px-3 py-2 text-right font-medium">Recovery</th>
               <th className="px-3 py-2 font-medium">Status</th>
+              <th className="px-3 py-2 font-medium">
+                <span className="sr-only">Actions</span>
+              </th>
             </tr>
           </thead>
           <tbody>
@@ -309,6 +380,33 @@ export function RetryMetricsAccordion({
                   >
                     {row.status}
                   </span>
+                </td>
+                <td className="px-3 py-2 text-right">
+                  {row.cancellable && row.attemptNumber !== undefined ? (
+                    <button
+                      type="button"
+                      onClick={() =>
+                        cancelScheduled(
+                          row.attemptNumber!,
+                          row.attemptNumber === earliestCancellable
+                        )
+                      }
+                      disabled={cancelling !== null}
+                      title={
+                        row.attemptNumber === earliestCancellable
+                          ? "Cancel all scheduled retries"
+                          : `Cancel retry #${row.attemptNumber} and any later attempts`
+                      }
+                      className="inline-flex items-center gap-1 whitespace-nowrap rounded-md border border-moon-red/30 px-2 py-1 text-[11px] font-medium text-moon-red transition-colors hover:bg-moon-red/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50"
+                    >
+                      {cancelling === row.attemptNumber ? (
+                        <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                      ) : (
+                        <X className="h-3.5 w-3.5" />
+                      )}
+                      Cancel
+                    </button>
+                  ) : null}
                 </td>
               </tr>
             ))}

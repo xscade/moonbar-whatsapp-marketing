@@ -45,6 +45,7 @@ export function CampaignTable({
   onCancel,
   onView,
   onOpenRetry,
+  onRetryChanged,
   compact = false
 }: {
   campaigns: Campaign[];
@@ -53,6 +54,7 @@ export function CampaignTable({
   onCancel: (campaign: Campaign) => void;
   onView?: (campaign: Campaign) => void;
   onOpenRetry?: (campaign: Campaign) => void;
+  onRetryChanged?: () => void;
   compact?: boolean;
 }) {
   const [expanded, setExpanded] = useState<Set<string>>(() => new Set());
@@ -306,7 +308,11 @@ export function CampaignTable({
               {isExpanded ? (
                 <TableRow className="bg-moon-cream/20 hover:bg-moon-cream/20">
                   <TableCell colSpan={colSpan} className="p-0">
-                    <RetryMetricsAccordion campaign={campaign} open={isExpanded} />
+                    <RetryMetricsAccordion
+                      campaign={campaign}
+                      open={isExpanded}
+                      onChanged={onRetryChanged}
+                    />
                   </TableCell>
                 </TableRow>
               ) : null}

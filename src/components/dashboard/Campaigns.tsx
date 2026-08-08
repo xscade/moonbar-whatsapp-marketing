@@ -63,6 +63,7 @@ export function Campaigns(props: {
   onResume: (campaign: Campaign) => void;
   onCancelCampaign: (campaign: Campaign) => void;
   onOpenRetry: (campaign: Campaign) => void;
+  onRetryChanged?: () => void;
   contacts: Contact[];
   allContacts: Contact[];
   lists: ContactList[];
@@ -309,6 +310,7 @@ export function Campaigns(props: {
               onCancel={props.onCancelCampaign}
               onView={openViewer}
               onOpenRetry={props.onOpenRetry}
+              onRetryChanged={props.onRetryChanged}
             />
           </div>
         </Section>
