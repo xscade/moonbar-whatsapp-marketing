@@ -47,6 +47,31 @@ type DashboardClientProps = {
   user: AdminUser;
 };
 
+function campaignNameFromTemplate(name: string) {
+  return name
+    .replace(/[_-]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .replace(/\b([a-zA-Z])/g, (char) => char.toUpperCase());
+}
+
+function parameterValuesFromTemplate(
+  template: MessageTemplate,
+  previous?: Campaign | null
+) {
+  const values: Record<string, string> = {};
+  for (const parameter of template.parameters ?? []) {
+    values[parameter.name] =
+      parameter.example || previous?.parameters?.[parameter.name] || "";
+  }
+  if (previous?.parameters) {
+    for (const [key, value] of Object.entries(previous.parameters)) {
+      if (!values[key]) values[key] = value;
+    }
+  }
+  return values;
+}
+
 async function api<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(path, {
     ...init,
@@ -64,6 +89,7 @@ async function api<T>(path: string, init?: RequestInit): Promise<T> {
 
 export function DashboardClient({ user }: DashboardClientProps) {
   const [activeTab, setActiveTab] = useState<TabKey>("overview");
+  const [campaignsView, setCampaignsView] = useState<"list" | "builder">("list");
   const [contacts, setContacts] = useState<Contact[]>([]);
   const [contactTotal, setContactTotal] = useState(0);
   const [lists, setLists] = useState<ContactList[]>([]);
@@ -80,6 +106,7 @@ export function DashboardClient({ user }: DashboardClientProps) {
   const [selectedContactIds, setSelectedContactIds] = useState<Set<string>>(new Set());
   const [selectedListIds, setSelectedListIds] = useState<Set<string>>(new Set());
   const [selectedTemplateName, setSelectedTemplateName] = useState("event_details_reminder_1");
+  const [selectedTemplateLanguage, setSelectedTemplateLanguage] = useState("en_US");
   const [campaignName, setCampaignName] = useState("Weekend event reminder");
   const [scheduledAt, setScheduledAt] = useState("");
   const [retryPlanningEnabled, setRetryPlanningEnabled] = useState(false);
@@ -154,8 +181,38 @@ export function DashboardClient({ user }: DashboardClientProps) {
     }
   }
 
+  function selectTab(tab: TabKey) {
+    if (tab === "campaigns") setCampaignsView("list");
+    setActiveTab(tab);
+  }
+
+  function createCampaignFromTemplate(template: MessageTemplate) {
+    const previous = campaigns.find(
+      (campaign) =>
+        campaign.templateName === template.name &&
+        campaign.language === template.language
+    );
+    setSelectedTemplateName(template.name);
+    setSelectedTemplateLanguage(template.language);
+    setParameterValues(parameterValuesFromTemplate(template, previous));
+    setContactFieldMappings(
+      previous?.contactFieldMappings ? { ...previous.contactFieldMappings } : {}
+    );
+    setCampaignName(campaignNameFromTemplate(template.name));
+    if (previous?.listIds?.length) {
+      setSelectedListIds(new Set(previous.listIds));
+    }
+    setScheduledAt("");
+    setRetryPlanningEnabled(false);
+    setRetryRelevantUntil("");
+    setHeaderImageId("");
+    setHeaderImageName("");
+    setCampaignsView("builder");
+    setActiveTab("campaigns");
+  }
+
   function handleNotificationClick(notification: DashboardNotification) {
-    if (notification.tab) setActiveTab(notification.tab);
+    if (notification.tab) selectTab(notification.tab);
     else if (notification.phone) setActiveTab("inbox");
     if (notification.phone) {
       setInboxFocusPhone(notification.phone.replace(/[^\d]/g, ""));
@@ -169,6 +226,11 @@ export function DashboardClient({ user }: DashboardClientProps) {
   };
 
   const selectedTemplate =
+    templates.find(
+      (template) =>
+        template.name === selectedTemplateName &&
+        template.language === selectedTemplateLanguage
+    ) ??
     templates.find((template) => template.name === selectedTemplateName) ??
     fallbackTemplate;
 
@@ -341,6 +403,11 @@ export function DashboardClient({ user }: DashboardClientProps) {
 
   useEffect(() => {
     const nextTemplate =
+      templates.find(
+        (template) =>
+          template.name === selectedTemplateName &&
+          template.language === selectedTemplateLanguage
+      ) ??
       templates.find((template) => template.name === selectedTemplateName) ??
       fallbackTemplate;
     setParameterValues((current) => {
@@ -364,12 +431,12 @@ export function DashboardClient({ user }: DashboardClientProps) {
       }
       return nextMappings;
     });
-  }, [selectedTemplateName, templates]);
+  }, [selectedTemplateName, selectedTemplateLanguage, templates]);
 
   useEffect(() => {
     setHeaderImageId("");
     setHeaderImageName("");
-  }, [selectedTemplateName]);
+  }, [selectedTemplateName, selectedTemplateLanguage]);
 
   // Load persisted notification "seen" marker.
   useEffect(() => {
@@ -1328,7 +1395,7 @@ export function DashboardClient({ user }: DashboardClientProps) {
     <DashboardShell
       user={user}
       activeTab={activeTab}
-      onSelect={setActiveTab}
+      onSelect={selectTab}
       search={search}
       setSearch={setSearch}
       onRefresh={refreshAll}
@@ -1394,7 +1461,11 @@ export function DashboardClient({ user }: DashboardClientProps) {
           setSelectedListIds={setSelectedListIds}
           templates={templates.length ? templates : [fallbackTemplate]}
           selectedTemplateName={selectedTemplateName}
-          setSelectedTemplateName={setSelectedTemplateName}
+          setSelectedTemplateName={(name) => {
+            setSelectedTemplateName(name);
+            const match = templates.find((template) => template.name === name);
+            if (match) setSelectedTemplateLanguage(match.language);
+          }}
           selectedTemplate={selectedTemplate}
           campaignName={campaignName}
           setCampaignName={setCampaignName}
@@ -1425,6 +1496,7 @@ export function DashboardClient({ user }: DashboardClientProps) {
           onSend={sendCampaign}
           onSchedule={scheduleCampaign}
           onCancel={cancelCurrentCampaign}
+          initialView={campaignsView}
         />
       ) : null}
 
@@ -1467,6 +1539,7 @@ export function DashboardClient({ user }: DashboardClientProps) {
           onSubmitTemplate={submitTemplate}
           onDeleteTemplate={deleteTemplate}
           onUploadTemplateMedia={uploadTemplateMedia}
+          onCreateCampaign={createCampaignFromTemplate}
         />
       ) : null}
 

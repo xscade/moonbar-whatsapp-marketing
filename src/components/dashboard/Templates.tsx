@@ -5,6 +5,7 @@ import { motion } from "motion/react";
 import {
   Copy,
   Loader2,
+  Megaphone,
   MessageSquarePlus,
   Pencil,
   RefreshCw,
@@ -81,7 +82,8 @@ export function Templates({
   onSync,
   onSubmitTemplate,
   onDeleteTemplate,
-  onUploadTemplateMedia
+  onUploadTemplateMedia,
+  onCreateCampaign
 }: {
   templates: MessageTemplate[];
   busy: string;
@@ -94,6 +96,7 @@ export function Templates({
   onUploadTemplateMedia: (
     file: File
   ) => Promise<{ handle: string; filename: string } | null>;
+  onCreateCampaign: (template: MessageTemplate) => void;
 }) {
   const [query, setQuery] = React.useState("");
   const [filter, setFilter] = React.useState<StatusFilter>("all");
@@ -201,10 +204,12 @@ export function Templates({
 
         <div className="grid gap-4">
           {filtered.map((template) => {
+            const status = (template.status || "").toUpperCase();
+            const approved = status === "APPROVED";
             const editable =
               !template.metaId ||
               !template.status ||
-              EDITABLE.includes(template.status.toUpperCase());
+              EDITABLE.includes(status);
             const deleting = busy === `delete-template-${template._id}`;
             return (
               <div
@@ -242,6 +247,19 @@ export function Templates({
                   ) : null}
 
                   <div className="mt-4 flex flex-wrap gap-2">
+                    <Button
+                      size="sm"
+                      onClick={() => onCreateCampaign(template)}
+                      disabled={!approved}
+                      title={
+                        approved
+                          ? "Open a new campaign with this template"
+                          : "Only approved templates can be used in campaigns"
+                      }
+                    >
+                      <Megaphone />
+                      Create Campaign
+                    </Button>
                     <Button
                       variant="outline"
                       size="sm"

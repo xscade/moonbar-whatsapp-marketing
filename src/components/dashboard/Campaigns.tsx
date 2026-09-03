@@ -104,6 +104,7 @@ export function Campaigns(props: {
   onSend: () => void;
   onSchedule: () => void;
   onCancel: () => void;
+  initialView?: "list" | "builder";
 }) {
   const percent = props.progress?.total
     ? Math.round((props.progress.sent / props.progress.total) * 100)
@@ -174,7 +175,9 @@ export function Campaigns(props: {
   const allShownSelected =
     shownContactIds.length > 0 && shownSelectedCount === shownContactIds.length;
 
-  const [view, setView] = useState<"list" | "builder" | "viewer">("list");
+  const [view, setView] = useState<"list" | "builder" | "viewer">(
+    props.initialView ?? "list"
+  );
   const [campaignSearch, setCampaignSearch] = useState("");
   const [viewCampaignId, setViewCampaignId] = useState("");
 
