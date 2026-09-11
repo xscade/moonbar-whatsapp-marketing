@@ -17,7 +17,7 @@ export default async function SetupPage() {
 
   return (
     <main className="flex min-h-screen items-center justify-center px-4 py-10">
-      <section className="grid w-full max-w-5xl overflow-hidden rounded-lg border border-moon-green/15 bg-white/84 shadow-soft backdrop-blur lg:grid-cols-[0.95fr_1.05fr]">
+      <section className="grid w-full max-w-5xl overflow-hidden rounded-2xl border border-moon-green/15 bg-card/95 shadow-soft backdrop-blur lg:grid-cols-[0.95fr_1.05fr]">
         <div className="bg-moon-green p-8 text-moon-paper lg:p-10">
           <Image
             src="https://moon-bar-kitchen-new.vercel.app/images/moon%20logo%20(2).png"

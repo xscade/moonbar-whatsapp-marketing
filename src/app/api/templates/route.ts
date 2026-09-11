@@ -1,17 +1,13 @@
-import { z } from "zod";
 import { error, handleRouteError, json, requireUser } from "@/lib/api";
 import { getDb } from "@/lib/mongodb";
 import { serializeDocs } from "@/lib/serializers";
-
-const templateSchema = z.object({
-  name: z.string().min(1),
-  language: z.string().default("en_US"),
-  category: z.string().optional(),
-  status: z.string().optional(),
-  body: z.string().optional(),
-  parameterFormat: z.enum(["NAMED", "POSITIONAL"]).default("NAMED"),
-  parameters: z.array(z.object({ name: z.string().min(1), example: z.string().optional() }))
-});
+import { graphPost } from "@/lib/whatsapp";
+import {
+  buildTemplateComponents,
+  detectParameterFormat,
+  templateDocFromPayload
+} from "@/lib/whatsapp/templates";
+import { builderSchema, metaErrorMessage } from "@/lib/whatsapp/templateSchema";
 
 export async function GET() {
   try {
@@ -31,18 +27,46 @@ export async function GET() {
 export async function POST(request: Request) {
   try {
     await requireUser();
-    const parsed = templateSchema.safeParse(await request.json());
-    if (!parsed.success) return error("Invalid template details", 422);
+    const parsed = builderSchema.safeParse(await request.json());
+    if (!parsed.success) {
+      return error("Invalid template details", 422, parsed.error.flatten());
+    }
+
+    const wabaId = process.env.WHATSAPP_BUSINESS_ACCOUNT_ID;
+    if (!wabaId) return error("WHATSAPP_BUSINESS_ACCOUNT_ID is required", 500);
+
+    const payload = parsed.data;
+    const format = detectParameterFormat(payload);
+    const response = await graphPost(`${wabaId}/message_templates`, {
+      name: payload.name,
+      language: payload.language,
+      category: payload.category,
+      parameter_format: format,
+      components: buildTemplateComponents(payload, format)
+    });
+
+    if (!response.ok) {
+      return error(
+        metaErrorMessage(response.body, "Meta rejected the template"),
+        response.status >= 400 ? response.status : 400
+      );
+    }
 
     const db = await getDb();
     const now = new Date();
-    const result = await db.collection("message_templates").insertOne({
-      ...parsed.data,
-      createdAt: now,
-      updatedAt: now
+    const status = response.body.status || "PENDING";
+    const doc = templateDocFromPayload(payload, {
+      metaId: response.body.id,
+      status
     });
 
-    return json({ _id: result.insertedId.toString() }, { status: 201 });
+    await db.collection("message_templates").updateOne(
+      { name: doc.name, language: doc.language },
+      { $set: { ...doc, updatedAt: now }, $setOnInsert: { createdAt: now } },
+      { upsert: true }
+    );
+
+    return json({ ok: true, metaId: response.body.id, status }, { status: 201 });
   } catch (err) {
     return handleRouteError(err);
   }
