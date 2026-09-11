@@ -12,6 +12,7 @@ import type {
   RetryMode,
   TemplateBuilderPayload
 } from "@/types/entities";
+import type { RuntimeEnvResponse } from "@/lib/runtimeEnv";
 
 import {
   ensureNotificationAudioReady,
@@ -45,6 +46,7 @@ import {
 
 type DashboardClientProps = {
   user: AdminUser;
+  runtimeEnv: RuntimeEnvResponse;
 };
 
 function campaignNameFromTemplate(name: string) {
@@ -87,7 +89,7 @@ async function api<T>(path: string, init?: RequestInit): Promise<T> {
   return body as T;
 }
 
-export function DashboardClient({ user }: DashboardClientProps) {
+export function DashboardClient({ user, runtimeEnv }: DashboardClientProps) {
   const [activeTab, setActiveTab] = useState<TabKey>("overview");
   const [campaignsView, setCampaignsView] = useState<"list" | "builder">("list");
   const [contacts, setContacts] = useState<Contact[]>([]);
@@ -1559,6 +1561,7 @@ export function DashboardClient({ user }: DashboardClientProps) {
           diagnostics={diagnostics}
           busy={busy}
           onLoad={loadDiagnostics}
+          runtimeEnv={runtimeEnv}
           notificationSoundEnabled={notificationSoundEnabled}
           onNotificationSoundEnabledChange={updateNotificationSoundEnabled}
         />

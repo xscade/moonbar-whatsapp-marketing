@@ -7,9 +7,24 @@ export async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> 
       ...(init?.headers ?? {})
     }
   });
-  const body = await response.json();
+  const text = await response.text();
+  let body: { error?: { message?: string } | string } = {};
+  if (text) {
+    try {
+      body = JSON.parse(text) as { error?: { message?: string } | string };
+    } catch {
+      if (!response.ok) {
+        throw new Error(text || "Request failed");
+      }
+      throw new Error("Request failed");
+    }
+  }
   if (!response.ok) {
-    throw new Error(body.error?.message || body.error || "Request failed");
+    const message =
+      typeof body.error === "string"
+        ? body.error
+        : body.error?.message || text || "Request failed";
+    throw new Error(message);
   }
   return body as T;
 }
