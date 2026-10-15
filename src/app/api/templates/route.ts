@@ -26,7 +26,7 @@ export async function GET() {
 
 export async function POST(request: Request) {
   try {
-    await requireUser();
+    const user = await requireUser();
     const parsed = builderSchema.safeParse(await request.json());
     if (!parsed.success) {
       return error("Invalid template details", 422, parsed.error.flatten());
@@ -62,7 +62,11 @@ export async function POST(request: Request) {
 
     await db.collection("message_templates").updateOne(
       { name: doc.name, language: doc.language },
-      { $set: { ...doc, updatedAt: now }, $setOnInsert: { createdAt: now } },
+      {
+        // Marks it as ours, so its webhook updates aren't forwarded to the valet app.
+        $set: { ...doc, createdVia: "dashboard", createdBy: user._id, updatedAt: now },
+        $setOnInsert: { createdAt: now }
+      },
       { upsert: true }
     );
 

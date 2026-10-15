@@ -84,26 +84,35 @@ so this endpoint passes events on to it. Set:
 VALET_WEBHOOK_FORWARD_URL=https://valetq-api.vercel.app/webhooks/whatsapp
 ```
 
-Leave it unset to turn forwarding off. When it is set, these webhook POSTs are
+Leave it unset to turn forwarding off. When it is set, a webhook POST is
 re-sent with the exact body bytes and Meta's `X-Hub-Signature-256` header, so
-the valet app can verify them with the same App Secret:
+the valet app can verify it with the same App Secret, when it contains any of:
 
-- `messages` events for `WHATSAPP_PHONE_NUMBER_ID`: guest messages and
-  delivery statuses (sent, delivered, read, failed) for everything sent from
-  that number, campaigns included.
-- Template updates (`message_template_status_update`,
-  `message_template_quality_update`, `message_template_components_update`,
-  `template_category_update`) for `WHATSAPP_BUSINESS_ACCOUNT_ID`.
+- A valet message to `WHATSAPP_PHONE_NUMBER_ID`: text (or a button or list
+  reply) matching `\btag\s+(VQ-[A-Z]+\d{2}|[0-9A-F]{6})\b` anywhere
+  (case-insensitive), starting with `ACCEPT-`, or that is just `car`,
+  `retrieve`, `pickup` or `Get My Car` (ignoring case and surrounding spaces).
+- A delivery status for a message this app didn't send. Every send path here
+  stores the message in `whatsapp_messages` with `from` set, so a status with
+  no such row belongs to the valet app.
+- A template update for `WHATSAPP_BUSINESS_ACCOUNT_ID` about a template this
+  app didn't create. Templates created from the dashboard are stored with
+  `createdVia: "dashboard"`; older ones count as ours if we have sent them.
 
-Phone number updates and events for other phone numbers are not forwarded. A
-signed body can't be trimmed, so a POST mixing these with anything else is not
-forwarded at all. The forward finishes (10 second timeout) before we reply to
-Meta, and Meta always gets a 200 whatever the valet app answers. Each result is
-stored on the event in `whatsapp_webhook_events` and shown in the Inbox tab's
-Webhook Audit.
+A signed body can't be trimmed, so the whole POST is forwarded when any part of
+it qualifies, and nothing is forwarded if any part belongs to another phone
+number or business account, or is another kind of event. If ownership can't be
+checked because MongoDB is unavailable, the POST is forwarded.
 
-The valet app answers valet messages itself, so this app must never auto-reply
-to them (it has no auto-replies today). They are tag scans matching
-`\btag\s+(VQ-[A-Z]+\d{2}|[0-9A-F]{6})\b` (case-insensitive), staff replies
-starting `ACCEPT-`, and messages that are just `car`, `retrieve` or `pickup`,
-or a tap on the "Get My Car" button.
+The forward finishes (10 second timeout) before we reply to Meta, and Meta
+always gets a 200 whatever the valet app answers. Each result is stored on the
+event in `whatsapp_webhook_events` and shown in the Inbox under Developer
+events, Webhooks tab.
+
+`tests/webhook-forward.test.mts` covers these rules end to end against the real
+route, with an in-memory MongoDB fake and a local stand-in for the valet app.
+Run it after `npm ci` with `npx tsx tests/webhook-forward.test.mts`.
+
+The valet app answers valet messages itself, so this app must never
+auto-reply to them. It has no auto-replies today. Staff can reply by hand from
+the Inbox, so they should leave valet conversations to the valet app.

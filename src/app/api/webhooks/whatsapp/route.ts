@@ -54,8 +54,10 @@ export async function POST(request: NextRequest) {
   // Forward before replying: on Vercel, work left after the response can be cut off.
   const [processed, forwarded] = await Promise.allSettled([
     processWebhookPayload(payload as never, eventId),
-    signature && shouldForwardWebhook(payload as never)
-      ? forwardWebhook(body, signature)
+    signature
+      ? shouldForwardWebhook(payload as never).then((forward) =>
+          forward ? forwardWebhook(body, signature) : null
+        )
       : null
   ]);
 
