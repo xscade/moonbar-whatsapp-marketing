@@ -2,6 +2,7 @@ import { redirect } from "next/navigation";
 import { getSessionUser, hasAdminUsers } from "@/lib/auth";
 import { DashboardClient } from "@/components/DashboardClient";
 import { ConfigError } from "@/components/ConfigError";
+import { getRuntimeEnv } from "@/lib/runtimeEnv";
 
 export const dynamic = "force-dynamic";
 
@@ -17,5 +18,7 @@ export default async function DashboardPage() {
   const user = await getSessionUser();
   if (!user) redirect("/login");
 
-  return <DashboardClient user={user} />;
+  return (
+    <DashboardClient user={user} runtimeEnv={getRuntimeEnv()} />
+  );
 }
