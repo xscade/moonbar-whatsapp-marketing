@@ -1,11 +1,17 @@
+import { ObjectId } from "mongodb";
 import { NextRequest, NextResponse } from "next/server";
 import {
+  forwardWebhook,
   processWebhookPayload,
+  recordWebhookForward,
+  shouldForwardWebhook,
   verifyChallenge,
   verifyWebhookSignature
 } from "@/lib/whatsapp";
 
 export const dynamic = "force-dynamic";
+// Forwarding to the valet app can take up to 10s before we reply to Meta.
+export const maxDuration = 30;
 
 export async function GET(request: NextRequest) {
   const challenge = verifyChallenge(request.nextUrl.searchParams);
@@ -24,7 +30,9 @@ export async function GET(request: NextRequest) {
 }
 
 export async function POST(request: NextRequest) {
-  const rawBody = await request.text();
+  // Keep the exact bytes: the valet app re-verifies Meta's signature over them.
+  const body = await request.arrayBuffer();
+  const rawBody = new TextDecoder().decode(body);
   const signature = request.headers.get("x-hub-signature-256");
 
   if (!verifyWebhookSignature(rawBody, signature)) {
@@ -41,12 +49,30 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: "Invalid JSON" }, { status: 400 });
   }
 
-  const result = await processWebhookPayload(payload as never);
+  const eventId = new ObjectId();
+
+  // Forward before replying: on Vercel, work left after the response can be cut off.
+  const [processed, forwarded] = await Promise.allSettled([
+    processWebhookPayload(payload as never, eventId),
+    signature && shouldForwardWebhook(payload as never)
+      ? forwardWebhook(body, signature)
+      : null
+  ]);
+
+  const forward = forwarded.status === "fulfilled" ? forwarded.value : null;
+  if (forward) {
+    await recordWebhookForward(eventId, forward);
+  }
+
+  if (processed.status === "rejected") {
+    throw processed.reason;
+  }
 
   return NextResponse.json(
     {
       success: true,
-      result
+      result: processed.value,
+      forward
     },
     { status: 200 }
   );

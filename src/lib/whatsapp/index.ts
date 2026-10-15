@@ -1,3 +1,8 @@
+export {
+  forwardWebhook,
+  recordWebhookForward,
+  shouldForwardWebhook
+} from "@/lib/whatsapp/forwardWebhook";
 export { graphGet } from "@/lib/whatsapp/graph";
 export { normalizePhone } from "@/lib/whatsapp/phone";
 export { sendTemplate } from "@/lib/whatsapp/sendTemplate";

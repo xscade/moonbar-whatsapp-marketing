@@ -108,6 +108,12 @@ type WebhookEvent = {
   _id: string;
   object?: string;
   payload: unknown;
+  forward?: {
+    ok: boolean;
+    status?: number;
+    error?: string;
+    durationMs: number;
+  };
   createdAt: string;
 };
 
@@ -1555,7 +1561,17 @@ function InboxPanel({
               <details key={event._id} className="border-b border-white/10 py-2 last:border-0">
                 <summary className="cursor-pointer text-xs font-medium text-moon-cream">
                   {event.object || "event"} · {formatDistanceToNow(new Date(event.createdAt))} ago
+                  {event.forward ? (
+                    <span className={event.forward.ok ? "text-moon-cream/60" : "text-moon-amber"}>
+                      {" "}· valet {event.forward.status ?? "error"}
+                    </span>
+                  ) : null}
                 </summary>
+                {event.forward?.error ? (
+                  <p className="mt-2 text-[11px] leading-5 text-moon-amber">
+                    Valet forward: {event.forward.error}
+                  </p>
+                ) : null}
                 <pre className="mt-2 whitespace-pre-wrap text-[11px] leading-5 text-moon-cream/70">
                   {JSON.stringify(event.payload, null, 2)}
                 </pre>
