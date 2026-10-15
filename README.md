@@ -90,8 +90,9 @@ the valet app can verify it with the same App Secret, when it contains any of:
 
 - A valet message to `WHATSAPP_PHONE_NUMBER_ID`: text (or a button or list
   reply) matching `\btag\s+(VQ-[A-Z]+\d{2}|[0-9A-F]{6})\b` anywhere
-  (case-insensitive), starting with `ACCEPT-`, or that is just `car`,
-  `retrieve`, `pickup` or `Get My Car` (ignoring case and surrounding spaces).
+  (case-insensitive), containing `car please` or `pick up` as words (any
+  case), starting with `ACCEPT-`, or that is just `car`, `retrieve`, `pickup`
+  or `Get My Car` (ignoring case and surrounding spaces).
 - A delivery status for a message this app didn't send. Every send path here
   stores the message in `whatsapp_messages` with `from` set, so a status with
   no such row belongs to the valet app.

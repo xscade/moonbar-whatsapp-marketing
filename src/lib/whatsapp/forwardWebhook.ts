@@ -10,9 +10,11 @@ const TEMPLATE_FIELDS = new Set([
   "template_category_update"
 ]);
 
-// Valet messages, as the valet team defined them. Tag scans can appear
-// anywhere in the text; car requests must be the whole message.
+// Valet messages, as the valet team defined them. Tag scans and the car
+// request phrases can appear anywhere in the text; the single-word car
+// requests must be the whole message.
 const TAG_SCAN = /\btag\s+(VQ-[A-Z]+\d{2}|[0-9A-F]{6})\b/i;
+const CAR_REQUEST_PHRASES = /\b(car\s+please|pick\s+up)\b/i;
 const CAR_REQUESTS = new Set(["car", "retrieve", "pickup", "get my car"]);
 
 type IncomingMessage = {
@@ -66,6 +68,7 @@ export function isValetMessage(message: IncomingMessage) {
     const normalized = text.trim().toLowerCase();
     return (
       TAG_SCAN.test(text) ||
+      CAR_REQUEST_PHRASES.test(text) ||
       normalized.startsWith("accept-") ||
       CAR_REQUESTS.has(normalized)
     );

@@ -156,7 +156,10 @@ await test("Get My Car template button forwarded", () => forwarded(msgs(button("
 await test("Get My Car interactive reply forwarded", () => forwarded(msgs(interactive("Get my car"))));
 await test("plain Hi not forwarded", () => notForwarded(msgs(text("Hi"))));
 await test("campaign reply not forwarded", () => notForwarded(msgs(text("Yes, book a table for 4 tonight"))));
-await test("'car please' not forwarded (car request must be the whole message)", () => notForwarded(msgs(text("car please"))));
+for (const t of ["car please", "Car Please", "My car please", "Can you pick up my car?", "pick up", "PICK  UP now"]) {
+  await test(`car request phrase ${JSON.stringify(t)} forwarded`, () => forwarded(msgs(text(t))));
+}
+await test("'my car' not forwarded (single-word car requests must be the whole message)", () => notForwarded(msgs(text("my car"))));
 await test("'my tag is VQ-A01' not forwarded", () => notForwarded(msgs(text("my tag is VQ-A01"))));
 await test("image without caption not forwarded", () => notForwarded(msgs(image())));
 await test("other button text not forwarded", () => notForwarded(msgs(button("Book a table"))));
@@ -216,8 +219,8 @@ await test("valet app hangs: forward times out at ~10s, Meta gets 200", async ()
 
 // ---- isValetMessage edge cases (pure) ----------------------------------------
 await test("isValetMessage edge cases", async () => {
-  const yes = ["tag VQ-AB12", "TAG A1B3F0", "tag VQ-A01", " pickup ", "GET MY CAR"];
-  const no = ["hashtag VQ-A01", "tag: VQ-A01", "tag VQ-A1", "pick up", "car.", "", "ACCEPT A1B3F0"];
+  const yes = ["tag VQ-AB12", "TAG A1B3F0", "tag VQ-A01", " pickup ", "GET MY CAR", "pick up", "car please!"];
+  const no = ["hashtag VQ-A01", "tag: VQ-A01", "tag VQ-A1", "pick-up", "car.", "", "ACCEPT A1B3F0", "carplease", "pickup truck", "scar please"];
   for (const t of yes) assert.ok(isValetMessage({ text: { body: t } }), `should match ${JSON.stringify(t)}`);
   for (const t of no) assert.ok(!isValetMessage({ text: { body: t } }), `should not match ${JSON.stringify(t)}`);
   assert.ok(!isValetMessage({} as never)); assert.ok(!isValetMessage(null as never));
