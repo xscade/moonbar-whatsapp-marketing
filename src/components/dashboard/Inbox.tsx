@@ -655,7 +655,17 @@ export function Inbox({
                   >
                     <summary className="cursor-pointer text-xs font-medium text-moon-cream">
                       {event.object || "event"} · {timeAgo(event.createdAt)}
+                      {event.forward ? (
+                        <span className={event.forward.ok ? "text-moon-cream/60" : "text-moon-amber"}>
+                          {" "}· valet {event.forward.status ?? "error"}
+                        </span>
+                      ) : null}
                     </summary>
+                    {event.forward?.error ? (
+                      <p className="mt-2 text-[11px] leading-5 text-moon-amber">
+                        Valet forward: {event.forward.error}
+                      </p>
+                    ) : null}
                     <pre className="mt-2 whitespace-pre-wrap break-words text-[11px] leading-5 text-moon-cream/70">
                       {JSON.stringify(event.payload, null, 2)}
                     </pre>

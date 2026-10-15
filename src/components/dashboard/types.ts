@@ -97,6 +97,12 @@ export type WebhookEvent = {
   _id: string;
   object?: string;
   payload: unknown;
+  forward?: {
+    ok: boolean;
+    status?: number;
+    error?: string;
+    durationMs: number;
+  };
   createdAt: string;
 };
 

@@ -1,3 +1,4 @@
+import { ObjectId } from "mongodb";
 import { getDb } from "@/lib/mongodb";
 import { processIncomingMessages } from "@/lib/whatsapp/processIncoming";
 import { processStatuses } from "@/lib/whatsapp/processStatus";
@@ -24,11 +25,15 @@ type WebhookPayload = {
   entry?: WebhookEntry[];
 };
 
-export async function processWebhookPayload(payload: WebhookPayload) {
+export async function processWebhookPayload(
+  payload: WebhookPayload,
+  eventId = new ObjectId()
+) {
   const db = await getDb();
   const now = new Date();
 
   await db.collection("whatsapp_webhook_events").insertOne({
+    _id: eventId,
     object: payload.object,
     payload,
     createdAt: now
