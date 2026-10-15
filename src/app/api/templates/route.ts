@@ -62,9 +62,17 @@ export async function POST(request: Request) {
 
     await db.collection("message_templates").updateOne(
       { name: doc.name, language: doc.language },
+      { $set: { ...doc, updatedAt: now }, $setOnInsert: { createdAt: now } },
+      { upsert: true }
+    );
+
+    // Records the template as ours, so its webhook updates aren't forwarded to
+    // the valet app. Kept apart from message_templates so deleting it there
+    // doesn't lose the record.
+    await db.collection("template_ownership").updateOne(
+      { name: doc.name },
       {
-        // Marks it as ours, so its webhook updates aren't forwarded to the valet app.
-        $set: { ...doc, createdVia: "dashboard", createdBy: user._id, updatedAt: now },
+        $set: { name: doc.name, createdVia: "dashboard", createdBy: user._id },
         $setOnInsert: { createdAt: now }
       },
       { upsert: true }

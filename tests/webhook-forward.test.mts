@@ -29,6 +29,7 @@ function matches(doc: Doc, filter: Doc): boolean {
       const c = cond as Doc;
       if ("$in" in c) return (c.$in as unknown[]).includes(value);
       if ("$exists" in c) return (value !== undefined) === c.$exists;
+      if ("$lt" in c) return value !== undefined && new Date(value as string) < new Date(c.$lt as string);
     }
     return String(value) === String(cond) && value !== undefined;
   });
@@ -36,17 +37,24 @@ function matches(doc: Doc, filter: Doc): boolean {
 const SEED: Record<string, Doc[]> = {
   whatsapp_messages: [
     // Sent by us (campaign / inbox): has `from`.
-    { messageId: "wamid.OURS1", direction: "outbound", from: MOON_BAR_PHONE_ID, to: "919876543210", type: "template", templateName: "diwali_offer" },
-    { messageId: "wamid.OURS2", direction: "outbound", from: MOON_BAR_PHONE_ID, to: "919876543211", type: "text" },
+    { messageId: "wamid.OURS1", direction: "outbound", from: MOON_BAR_PHONE_ID, to: "919876543210", type: "template", templateName: "diwali_offer", createdAt: "2026-09-01T10:00:00Z" },
+    { messageId: "wamid.OURS2", direction: "outbound", from: MOON_BAR_PHONE_ID, to: "919876543211", type: "text", createdAt: "2026-10-20T10:00:00Z" },
+    // Staff sent the valet app's template from our inbox after forwarding existed.
+    { messageId: "wamid.OURS3", direction: "outbound", from: MOON_BAR_PHONE_ID, to: "919876543212", type: "template", templateName: "get_my_car", createdAt: "2026-10-20T10:00:00Z" },
     // Placeholder created by processStatuses for a valet-app message: no `from`.
     { messageId: "wamid.VALET_SEEN", direction: "outbound", to: "919876543210", type: "template" },
     // Inbound guest message: direction inbound.
     { messageId: "wamid.IN1", direction: "inbound", from: "919876543210", type: "text" }
   ],
   message_templates: [
-    { name: "weekend_menu", language: "en", createdVia: "dashboard" },
+    { name: "weekend_menu", language: "en", metaId: "554" },
     { name: "get_my_car", language: "en", metaId: "555" },
     { name: "diwali_offer", language: "en", metaId: "556" }
+  ],
+  // Created from the dashboard. old_promo has since been deleted from message_templates.
+  template_ownership: [
+    { name: "weekend_menu", createdVia: "dashboard" },
+    { name: "old_promo", createdVia: "dashboard" }
   ]
 };
 let store: Record<string, Doc[]> = {};
@@ -167,8 +175,9 @@ await test("valet status for another number not forwarded", () => notForwarded(w
 
 // ---- template updates --------------------------------------------------------
 await test("update for a template created from our dashboard not forwarded", () => notForwarded(wrap([tmpl("weekend_menu")])));
-await test("update for an older template we've sent not forwarded", () => notForwarded(wrap([tmpl("diwali_offer", "message_template_quality_update")])));
-await test("update for the valet app's template forwarded", () => forwarded(wrap([tmpl("get_my_car")])));
+await test("update for an older template we sent before tracking began not forwarded", () => notForwarded(wrap([tmpl("diwali_offer", "message_template_quality_update")])));
+await test("update for a deleted dashboard template not forwarded", () => notForwarded(wrap([tmpl("old_promo", "message_template_status_update")])));
+await test("update for the valet app's template forwarded, even after our staff sent it", () => forwarded(wrap([tmpl("get_my_car")])));
 await test("update for a template we've never seen forwarded", () => forwarded(wrap([tmpl("valet_ticket_ready", "template_category_update")])));
 await test("template update without a name forwarded", () => forwarded(wrap([{ field: "message_template_components_update", value: { message_template_id: 1 } }])));
 await test("valet template update for another WABA not forwarded", () => notForwarded(wrap([tmpl("get_my_car")], "999999999999999")));

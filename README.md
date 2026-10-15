@@ -96,8 +96,11 @@ the valet app can verify it with the same App Secret, when it contains any of:
   stores the message in `whatsapp_messages` with `from` set, so a status with
   no such row belongs to the valet app.
 - A template update for `WHATSAPP_BUSINESS_ACCOUNT_ID` about a template this
-  app didn't create. Templates created from the dashboard are stored with
-  `createdVia: "dashboard"`; older ones count as ours if we have sent them.
+  app didn't create. Templates created from the dashboard are recorded in the
+  `template_ownership` collection (deleting a template doesn't remove the
+  record). Older ones count as ours if we sent them before 16 October 2026; to
+  mark an older one that was never sent, insert `{ name }` into
+  `template_ownership`.
 
 A signed body can't be trimmed, so the whole POST is forwarded when any part of
 it qualifies, and nothing is forwarded if any part belongs to another phone

@@ -90,24 +90,33 @@ async function hasValetStatus(db: Db, statusIds: string[]) {
   return statusIds.some((id) => !ourIds.has(id));
 }
 
-// Templates created from the dashboard are marked createdVia "dashboard".
-// Older ones count as ours if we have ever sent them.
+// Sends from before forwarding existed are all ours: the valet app wasn't
+// sending on this number yet.
+const OWNERSHIP_TRACKED_SINCE = new Date("2026-10-16T00:00:00Z");
+
+// Templates created from the dashboard are recorded in template_ownership.
+// Older ones count as ours if we sent them before OWNERSHIP_TRACKED_SINCE; a
+// later send doesn't count, so staff sending one of the valet app's templates
+// from the inbox doesn't take it over.
 async function isValetTemplate(db: Db, name: string | undefined) {
   if (!name) return true;
 
-  const [created, sent] = await Promise.all([
+  const [created, sentEarlier] = await Promise.all([
     db
-      .collection("message_templates")
-      .findOne({ name, createdVia: "dashboard" }, { projection: { _id: 1 } }),
-    db
-      .collection("whatsapp_messages")
-      .findOne(
-        { templateName: name, direction: "outbound", from: { $exists: true } },
-        { projection: { _id: 1 } }
-      )
+      .collection("template_ownership")
+      .findOne({ name }, { projection: { _id: 1 } }),
+    db.collection("whatsapp_messages").findOne(
+      {
+        templateName: name,
+        direction: "outbound",
+        from: { $exists: true },
+        createdAt: { $lt: OWNERSHIP_TRACKED_SINCE }
+      },
+      { projection: { _id: 1 } }
+    )
   ]);
 
-  return !created && !sent;
+  return !created && !sentEarlier;
 }
 
 // The valet app shares our Meta app, so Meta only calls us. It gets valet
