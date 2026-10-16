@@ -16,13 +16,16 @@ const TEMPLATE_FIELDS = new Set([
 const TAG_SCAN = /\btag\s+(VQ-[A-Z]+\d{2}|[0-9A-F]{6})\b/i;
 const CAR_REQUEST_PHRASES = /\b(car\s+please|pick\s+up)\b/i;
 const CAR_REQUESTS = new Set(["car", "retrieve", "pickup", "get my car"]);
+// The valet app gives every one of its buttons an id or payload starting
+// with this, so its button taps are forwarded whatever the button says.
+const VALET_BUTTON_ID_PREFIX = "vq:";
 
 type IncomingMessage = {
   text?: { body?: string };
   button?: { text?: string; payload?: string };
   interactive?: {
-    button_reply?: { title?: string };
-    list_reply?: { title?: string };
+    button_reply?: { id?: string; title?: string };
+    list_reply?: { id?: string; title?: string };
   };
 };
 
@@ -55,6 +58,21 @@ function asArray<T>(value: T[] | undefined): T[] {
 // Typed text, template quick-reply buttons ("Get My Car") and interactive
 // replies are all checked the same way.
 export function isValetMessage(message: IncomingMessage) {
+  const buttonIds = [
+    message?.button?.payload,
+    message?.interactive?.button_reply?.id,
+    message?.interactive?.list_reply?.id
+  ];
+  if (
+    buttonIds.some(
+      (id) =>
+        typeof id === "string" &&
+        id.trim().toLowerCase().startsWith(VALET_BUTTON_ID_PREFIX)
+    )
+  ) {
+    return true;
+  }
+
   const texts = [
     message?.text?.body,
     message?.button?.text,

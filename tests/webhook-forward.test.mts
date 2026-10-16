@@ -163,6 +163,15 @@ await test("'my car' not forwarded (single-word car requests must be the whole m
 await test("'my tag is VQ-A01' not forwarded", () => notForwarded(msgs(text("my tag is VQ-A01"))));
 await test("image without caption not forwarded", () => notForwarded(msgs(image())));
 await test("other button text not forwarded", () => notForwarded(msgs(button("Book a table"))));
+const idButton = (title: string, id: string, kind: "button_reply" | "list_reply" = "button_reply") => ({ from: "919876543210", id: `wamid.R${++n}`, timestamp: "1760600000", type: "interactive", interactive: { type: kind, [kind]: { id, title } } });
+const payloadButton = (t: string, payload: string) => ({ from: "919876543210", id: `wamid.P${++n}`, timestamp: "1760600000", type: "button", button: { text: t, payload } });
+await test("interactive button with VQ: id forwarded, whatever its title", () => forwarded(msgs(idButton("🚗 Get my car", "VQ:car"))));
+await test("list reply with VQ: id forwarded", () => forwarded(msgs(idButton("Accept job", "VQ:ACCEPT-A1B3F0", "list_reply"))));
+await test("template button with VQ: payload forwarded, whatever its text", () => forwarded(msgs(payloadButton("Bring my vehicle", "VQ:car"))));
+await test("lowercase vq: id forwarded", () => forwarded(msgs(idButton("Car", "vq:car"))));
+await test("button id without the VQ: prefix not forwarded", () => notForwarded(msgs(idButton("Book a table", "MB:book"))));
+await test("VQ: in the middle of an id not forwarded", () => notForwarded(msgs(idButton("Promo", "promo-VQ:car"))));
+await test("VQ: typed as text is not a button id", () => notForwarded(msgs(text("VQ:hello"))));
 await test("batch Hi + car forwarded (any valet item forwards the whole POST)", () => forwarded(msgs(text("Hi"), text("car"))));
 await test("valet message for another number not forwarded", () => notForwarded(wrap([messagesChange(OTHER_PHONE_ID, { messages: [text("car")] })])));
 await test("valet message mixed with another number's change not forwarded", () => notForwarded(wrap([messagesChange(MOON_BAR_PHONE_ID, { messages: [text("car")] }), messagesChange(OTHER_PHONE_ID, { messages: [text("Hi")] })])));
